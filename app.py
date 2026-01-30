@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_file
 
 from audio_utils import convert_to_cd_wav, get_duration
 from cd_utils import DEFAULT_CAPACITY_SECONDS, burn_cd, get_cd_capacity
@@ -239,6 +239,18 @@ def clear_all():
     tracks = []
     save_playlist()
     return jsonify({"success": True})
+
+
+@app.route("/audio/<track_id>")
+def serve_audio(track_id):
+    """Serve audio file for playback."""
+    for track in tracks:
+        if track["id"] == track_id:
+            filepath = Path(track["filepath"])
+            if filepath.exists():
+                return send_file(filepath)
+            break
+    return jsonify({"error": "Track not found"}), 404
 
 
 @app.route("/cd-info", methods=["GET"])
