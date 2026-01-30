@@ -26,6 +26,7 @@
     const downloadList = document.getElementById('download-list');
     const playButtonsContainer = document.getElementById('track-play-buttons');
     const deleteButtonsContainer = document.getElementById('track-delete-buttons');
+    const downloadButtonsContainer = document.getElementById('track-download-buttons');
 
     // State
     let tracks = [];
@@ -325,6 +326,7 @@
         trackList.innerHTML = '';
         playButtonsContainer.innerHTML = '';
         deleteButtonsContainer.innerHTML = '';
+        downloadButtonsContainer.innerHTML = '';
 
         tracks.forEach((track, index) => {
             // Create option in listbox
@@ -372,6 +374,20 @@
 
             deleteBtn.addEventListener('click', () => deleteTrack(index));
             deleteButtonsContainer.appendChild(deleteBtn);
+
+            // Create download button
+            const downloadBtn = document.createElement('button');
+            downloadBtn.type = 'button';
+            downloadBtn.className = 'track-download';
+            downloadBtn.setAttribute('tabindex', '-1');
+            downloadBtn.setAttribute('aria-hidden', 'true');
+            downloadBtn.setAttribute('aria-label', `Download ${track.name}`);
+            downloadBtn.title = 'Download track';
+            downloadBtn.textContent = '↓';
+            downloadBtn.dataset.trackId = track.id;
+
+            downloadBtn.addEventListener('click', () => downloadTrack(track.id, track.name));
+            downloadButtonsContainer.appendChild(downloadBtn);
         });
 
         // Update UI state
@@ -407,6 +423,12 @@
         });
 
         deleteButtonsContainer.querySelectorAll('.track-delete').forEach((btn, i) => {
+            const isSelected = i === index;
+            btn.setAttribute('tabindex', isSelected ? '0' : '-1');
+            btn.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
+        });
+
+        downloadButtonsContainer.querySelectorAll('.track-download').forEach((btn, i) => {
             const isSelected = i === index;
             btn.setAttribute('tabindex', isSelected ? '0' : '-1');
             btn.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
@@ -455,6 +477,16 @@
         } catch (error) {
             showStatus('Failed to delete track', 'error');
         }
+    }
+
+    // Download track
+    function downloadTrack(trackId, trackName) {
+        const link = document.createElement('a');
+        link.href = `/audio/${trackId}`;
+        link.download = trackName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     }
 
     // Toggle play/stop for a track

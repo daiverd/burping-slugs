@@ -161,7 +161,7 @@ button.danger:hover:not(:disabled) {
 
 #track-list-wrapper {
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto auto auto;
 }
 
 #track-list {
@@ -171,7 +171,8 @@ button.danger:hover:not(:disabled) {
 }
 
 #track-play-buttons,
-#track-delete-buttons {
+#track-delete-buttons,
+#track-download-buttons {
     display: flex;
     flex-direction: column;
     gap: var(--space-xs);
@@ -242,12 +243,27 @@ button.danger:hover:not(:disabled) {
     padding: var(--space-sm) var(--space-md);
     font-size: 1.25rem;
     cursor: pointer;
-    border-radius: 0 4px 4px 0;
+    border-radius: 0;
 }
 
 .track-delete:hover {
     background-color: var(--color-danger);
     color: var(--color-text);
+}
+
+.track-download {
+    background-color: var(--color-surface-alt);
+    border: none;
+    color: var(--color-text-muted);
+    padding: var(--space-sm) var(--space-md);
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 0 4px 4px 0;
+}
+
+.track-download:hover {
+    background-color: var(--color-primary);
+    color: var(--color-bg);
 }
 
 #empty-message {
