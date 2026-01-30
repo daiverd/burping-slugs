@@ -9,6 +9,7 @@ A web-based audio CD burning application. Upload audio files, arrange tracks, an
 - Shuffle/randomize track order
 - Real-time burn progress via SSE
 - Automatic audio conversion to CD-compatible WAV (44.1kHz/16-bit stereo)
+- Two-pass EBU R128 loudness normalization (-14 LUFS) for consistent volume across tracks
 - CD capacity detection
 - Optional 2-second gaps between tracks
 - Dummy burn mode for testing
