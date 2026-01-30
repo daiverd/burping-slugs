@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Burping Slug's Retro CD Burner</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <main>
+        <h1>Burping Slug's Retro CD Burner</h1>
+
+        <!-- Upload zone -->
+        <section aria-label="File upload area">
+            <div id="dropzone" tabindex="0" role="button" aria-describedby="upload-hint">
+                <p>Drop audio files here, paste with Ctrl+V, or</p>
+                <button type="button" id="browse-btn">Browse Files</button>
+                <input type="file" id="file-input" multiple accept="audio/*" hidden aria-label="Select audio files">
+            </div>
+            <p id="upload-hint" class="hint">Supports any audio format (MP3, FLAC, WAV, OGG, etc.)</p>
+        </section>
+
+        <!-- Track list -->
+        <section aria-label="Track list">
+            <h2>Tracks <span id="track-count">(0)</span></h2>
+            <div id="track-list-container">
+                <ul id="track-list" role="listbox" aria-label="Tracks to burn" tabindex="0">
+                    <!-- Track items inserted here -->
+                </ul>
+                <p id="empty-message">No tracks added yet.</p>
+            </div>
+            <div class="track-actions">
+                <button type="button" id="randomize-btn" disabled>Randomize Order</button>
+                <button type="button" id="clear-btn" disabled>Clear All</button>
+            </div>
+            <p class="hint">Keyboard: Alt+Up/Down to move, Alt+Home/End for top/bottom, Delete to remove</p>
+        </section>
+
+        <!-- CD capacity -->
+        <section aria-label="CD capacity" id="capacity-section">
+            <h2>Disc Capacity</h2>
+            <div class="capacity-bar">
+                <progress id="capacity-progress" max="4800" value="0"></progress>
+                <p id="capacity-text" aria-live="polite">0:00 / 80:00 (0%)</p>
+            </div>
+            <p id="disc-status" aria-live="polite">Checking for disc...</p>
+        </section>
+
+        <!-- Burn controls -->
+        <section aria-label="Burn controls">
+            <div class="burn-actions">
+                <button type="button" id="burn-btn" disabled>Burn CD</button>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="track-gaps" checked>
+                    <span>2-second gaps between tracks</span>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="dummy-mode">
+                    <span>Test mode (dry run)</span>
+                </label>
+            </div>
+        </section>
+
+        <!-- Status -->
+        <section aria-label="Status" id="status-section">
+            <div id="status" role="status" aria-live="polite"></div>
+            <div id="progress-container" hidden>
+                <p id="progress-text"></p>
+                <progress id="burn-progress" max="100" value="0"></progress>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

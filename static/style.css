@@ -1,0 +1,371 @@
+/* Audio CD Burner - Accessible Styles (WCAG 2.1 AA) */
+
+:root {
+    /* High contrast colors */
+    --color-bg: #1a1a2e;
+    --color-surface: #16213e;
+    --color-surface-alt: #0f3460;
+    --color-text: #eaeaea;
+    --color-text-muted: #a0a0a0;
+    --color-primary: #4fc3f7;
+    --color-primary-hover: #81d4fa;
+    --color-danger: #ef5350;
+    --color-danger-hover: #f44336;
+    --color-success: #66bb6a;
+    --color-warning: #ffa726;
+    --color-focus: #ffeb3b;
+    --color-border: #3a4a6b;
+
+    /* Spacing */
+    --space-xs: 0.25rem;
+    --space-sm: 0.5rem;
+    --space-md: 1rem;
+    --space-lg: 1.5rem;
+    --space-xl: 2rem;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 1rem;
+    line-height: 1.5;
+    color: var(--color-text);
+    background-color: var(--color-bg);
+    margin: 0;
+    padding: var(--space-md);
+}
+
+main {
+    max-width: 50rem;
+    margin: 0 auto;
+}
+
+h1 {
+    font-size: 2rem;
+    margin-bottom: var(--space-lg);
+    text-align: center;
+}
+
+h2 {
+    font-size: 1.25rem;
+    margin-top: var(--space-lg);
+    margin-bottom: var(--space-md);
+}
+
+section {
+    margin-bottom: var(--space-xl);
+}
+
+/* Focus indicator - visible and high contrast */
+:focus {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+    outline: none;
+}
+
+:focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 2px;
+}
+
+/* Buttons */
+button {
+    font-size: 1rem;
+    padding: var(--space-sm) var(--space-md);
+    border: 2px solid var(--color-primary);
+    border-radius: 4px;
+    background-color: var(--color-primary);
+    color: var(--color-bg);
+    cursor: pointer;
+    font-weight: 600;
+    transition: background-color 0.15s, border-color 0.15s;
+}
+
+button:hover:not(:disabled) {
+    background-color: var(--color-primary-hover);
+    border-color: var(--color-primary-hover);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+button.danger {
+    background-color: var(--color-danger);
+    border-color: var(--color-danger);
+}
+
+button.danger:hover:not(:disabled) {
+    background-color: var(--color-danger-hover);
+    border-color: var(--color-danger-hover);
+}
+
+/* Dropzone */
+#dropzone {
+    border: 3px dashed var(--color-border);
+    border-radius: 8px;
+    padding: var(--space-xl);
+    text-align: center;
+    background-color: var(--color-surface);
+    transition: border-color 0.15s, background-color 0.15s;
+}
+
+#dropzone:hover,
+#dropzone:focus,
+#dropzone.dragover {
+    border-color: var(--color-primary);
+    background-color: var(--color-surface-alt);
+}
+
+#dropzone p {
+    margin: 0 0 var(--space-md) 0;
+    font-size: 1.125rem;
+}
+
+/* Hints */
+.hint {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+    margin-top: var(--space-sm);
+}
+
+/* Track list */
+#track-list-container {
+    background-color: var(--color-surface);
+    border-radius: 8px;
+    min-height: 4rem;
+    padding: var(--space-sm);
+}
+
+#track-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#track-list:focus {
+    outline: none;
+}
+
+#track-list:focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: -3px;
+}
+
+.track-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    background-color: var(--color-surface-alt);
+    border-radius: 4px;
+    margin-bottom: var(--space-xs);
+    cursor: pointer;
+}
+
+.track-item:last-child {
+    margin-bottom: 0;
+}
+
+.track-item:hover {
+    background-color: var(--color-border);
+}
+
+.track-item[aria-selected="true"] {
+    background-color: var(--color-border);
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+}
+
+.track-item:focus {
+    outline: 3px solid var(--color-focus);
+    outline-offset: -3px;
+}
+
+.track-number {
+    font-weight: 600;
+    min-width: 2rem;
+    color: var(--color-text-muted);
+}
+
+.track-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.track-duration {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.track-delete {
+    background: none;
+    border: none;
+    color: var(--color-danger);
+    padding: var(--space-xs);
+    font-size: 1.25rem;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.track-delete:hover {
+    background-color: var(--color-danger);
+    color: var(--color-text);
+}
+
+#empty-message {
+    text-align: center;
+    color: var(--color-text-muted);
+    padding: var(--space-md);
+    margin: 0;
+}
+
+#empty-message[hidden] {
+    display: none;
+}
+
+/* Track actions */
+.track-actions {
+    display: flex;
+    gap: var(--space-md);
+    margin-top: var(--space-md);
+}
+
+/* Capacity bar */
+.capacity-bar {
+    background-color: var(--color-surface);
+    padding: var(--space-md);
+    border-radius: 8px;
+}
+
+progress {
+    width: 100%;
+    height: 1.5rem;
+    border-radius: 4px;
+    overflow: hidden;
+    background-color: var(--color-surface-alt);
+    border: none;
+}
+
+progress::-webkit-progress-bar {
+    background-color: var(--color-surface-alt);
+    border-radius: 4px;
+}
+
+progress::-webkit-progress-value {
+    background-color: var(--color-primary);
+    border-radius: 4px;
+    transition: width 0.3s;
+}
+
+progress::-moz-progress-bar {
+    background-color: var(--color-primary);
+    border-radius: 4px;
+}
+
+#capacity-progress[data-over="true"]::-webkit-progress-value {
+    background-color: var(--color-danger);
+}
+
+#capacity-progress[data-over="true"]::-moz-progress-bar {
+    background-color: var(--color-danger);
+}
+
+#capacity-text {
+    margin: var(--space-sm) 0 0 0;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+#disc-status {
+    text-align: center;
+    font-size: 0.875rem;
+}
+
+.disc-present {
+    color: var(--color-success);
+}
+
+.disc-absent {
+    color: var(--color-warning);
+}
+
+/* Burn controls */
+.burn-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-lg);
+}
+
+#burn-btn {
+    font-size: 1.25rem;
+    padding: var(--space-md) var(--space-xl);
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 1.25rem;
+    height: 1.25rem;
+    cursor: pointer;
+}
+
+/* Status section */
+#status-section {
+    background-color: var(--color-surface);
+    padding: var(--space-md);
+    border-radius: 8px;
+    min-height: 3rem;
+}
+
+#status:empty {
+    display: none;
+}
+
+#progress-container {
+    margin-top: var(--space-md);
+}
+
+#progress-container[hidden] {
+    display: none;
+}
+
+#progress-text {
+    margin: 0 0 var(--space-sm) 0;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    body {
+        padding: var(--space-sm);
+    }
+
+    h1 {
+        font-size: 1.5rem;
+    }
+
+    #dropzone {
+        padding: var(--space-md);
+    }
+
+    .track-actions,
+    .burn-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

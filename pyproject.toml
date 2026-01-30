@@ -1,0 +1,9 @@
+[project]
+name = "burping-slugs-retro-cd-burner"
+version = "0.1.0"
+description = "Burping Slug's Retro CD Burner - Audio CD burning web application"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.0",
+    "supervisor>=4.3.0",
+]
