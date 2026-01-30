@@ -586,6 +586,9 @@
             if (isBurning) return;
             if (tracks.length === 0) return;
 
+            // Don't interfere with system shortcuts (Ctrl+V, Ctrl+C, etc.)
+            if (e.ctrlKey || e.metaKey) return;
+
             const key = e.key;
             const alt = e.altKey;
 
