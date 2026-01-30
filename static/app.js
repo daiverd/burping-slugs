@@ -717,7 +717,11 @@
         capacityProgress.value = Math.round(Math.min(totalDuration, cdCapacity) / 60 * 100) / 100;
         capacityProgress.dataset.over = isOver ? 'true' : 'false';
 
-        capacityText.textContent = `${formatDuration(totalDuration)} / ${formatDuration(cdCapacity)} (${percent}%)`;
+        const capacityStr = `${formatDuration(totalDuration)} / ${formatDuration(cdCapacity)} (${percent}%)`;
+        capacityText.textContent = capacityStr;
+
+        // Update page title with capacity
+        document.title = `Burping Slug's Retro CD Burner - ${capacityStr}`;
 
         if (isOver) {
             capacityText.style.color = 'var(--color-danger)';
