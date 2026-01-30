@@ -159,19 +159,32 @@ button.danger:hover:not(:disabled) {
     outline-offset: -3px;
 }
 
+#track-list-wrapper {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+}
+
+#track-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+#track-play-buttons,
+#track-delete-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
 .track-item {
     display: flex;
     align-items: center;
     gap: var(--space-md);
     padding: var(--space-sm) var(--space-md);
     background-color: var(--color-surface-alt);
-    border-radius: 4px;
-    margin-bottom: var(--space-xs);
+    border-radius: 4px 0 0 4px;
     cursor: pointer;
-}
-
-.track-item:last-child {
-    margin-bottom: 0;
 }
 
 .track-item:hover {
@@ -207,15 +220,29 @@ button.danger:hover:not(:disabled) {
     font-variant-numeric: tabular-nums;
 }
 
+.track-play {
+    background-color: var(--color-surface-alt);
+    border: none;
+    color: var(--color-primary);
+    padding: var(--space-sm) var(--space-md);
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 0;
+}
+
+.track-play:hover {
+    background-color: var(--color-primary);
+    color: var(--color-bg);
+}
+
 .track-delete {
-    background: none;
+    background-color: var(--color-surface-alt);
     border: none;
     color: var(--color-danger);
-    padding: var(--space-xs);
+    padding: var(--space-sm) var(--space-md);
     font-size: 1.25rem;
-    line-height: 1;
     cursor: pointer;
-    border-radius: 4px;
+    border-radius: 0 4px 4px 0;
 }
 
 .track-delete:hover {

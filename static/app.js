@@ -24,6 +24,8 @@
     const burnProgress = document.getElementById('burn-progress');
     const downloadSection = document.getElementById('download-section');
     const downloadList = document.getElementById('download-list');
+    const playButtonsContainer = document.getElementById('track-play-buttons');
+    const deleteButtonsContainer = document.getElementById('track-delete-buttons');
 
     // State
     let tracks = [];
@@ -33,6 +35,10 @@
     let isBurning = false;
     let isDownloading = false;
     let activeDownloads = new Map(); // job_id -> {url, status, progress, message}
+
+    // Audio playback
+    let audioPlayer = null;
+    let playingTrackId = null;
 
     // URL pattern for detecting URLs in pasted text
     const URL_PATTERN = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
@@ -317,34 +323,55 @@
     // Render track list
     function renderTracks() {
         trackList.innerHTML = '';
+        playButtonsContainer.innerHTML = '';
+        deleteButtonsContainer.innerHTML = '';
 
         tracks.forEach((track, index) => {
-            const li = document.createElement('li');
-            li.className = 'track-item';
-            li.setAttribute('role', 'option');
-            li.setAttribute('aria-selected', index === selectedIndex ? 'true' : 'false');
-            li.setAttribute('tabindex', '-1');
-            li.dataset.index = index;
-            li.dataset.id = track.id;
+            // Create option in listbox
+            const item = document.createElement('div');
+            item.className = 'track-item';
+            item.id = `track-option-${index}`;
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', index === selectedIndex ? 'true' : 'false');
+            item.dataset.index = index;
+            item.dataset.id = track.id;
 
-            li.innerHTML = `
+            item.innerHTML = `
                 <span class="track-number">${index + 1}.</span>
                 <span class="track-name">${escapeHtml(track.name)}</span>
                 <span class="track-duration">${formatDuration(track.duration)}</span>
-                <button type="button" class="track-delete" tabindex="-1" aria-label="Delete ${escapeHtml(track.name)}" title="Delete track">x</button>
             `;
 
-            li.addEventListener('click', (e) => {
-                if (!e.target.classList.contains('track-delete')) {
-                    selectTrack(index);
-                }
-            });
+            item.addEventListener('click', () => selectTrack(index));
+            trackList.appendChild(item);
 
-            li.querySelector('.track-delete').addEventListener('click', () => {
-                deleteTrack(index);
-            });
+            // Create play button
+            const playBtn = document.createElement('button');
+            playBtn.type = 'button';
+            playBtn.className = 'track-play';
+            playBtn.setAttribute('tabindex', '-1');
+            playBtn.setAttribute('aria-hidden', 'true');
+            playBtn.setAttribute('aria-label', `Play ${track.name}`);
+            playBtn.title = 'Play track';
+            playBtn.textContent = playingTrackId === track.id ? '■' : '▶';
+            playBtn.dataset.trackId = track.id;
 
-            trackList.appendChild(li);
+            playBtn.addEventListener('click', () => togglePlay(track.id, track.name));
+            playButtonsContainer.appendChild(playBtn);
+
+            // Create delete button
+            const deleteBtn = document.createElement('button');
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'track-delete';
+            deleteBtn.setAttribute('tabindex', '-1');
+            deleteBtn.setAttribute('aria-hidden', 'true');
+            deleteBtn.setAttribute('aria-label', `Delete ${track.name}`);
+            deleteBtn.title = 'Delete track';
+            deleteBtn.textContent = 'x';
+            deleteBtn.dataset.index = index;
+
+            deleteBtn.addEventListener('click', () => deleteTrack(index));
+            deleteButtonsContainer.appendChild(deleteBtn);
         });
 
         // Update UI state
@@ -354,6 +381,13 @@
         randomizeBtn.disabled = tracks.length < 2 || isBurning;
         clearBtn.disabled = !hasTrack || isBurning;
         updateBurnButton();
+
+        // Set aria-activedescendant to preserve selection
+        if (selectedIndex >= 0 && selectedIndex < tracks.length) {
+            trackList.setAttribute('aria-activedescendant', `track-option-${selectedIndex}`);
+        } else {
+            trackList.removeAttribute('aria-activedescendant');
+        }
     }
 
     // Select track
@@ -363,20 +397,26 @@
         selectedIndex = index;
 
         trackList.querySelectorAll('.track-item').forEach((item, i) => {
-            const isSelected = i === index;
-            item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
-            // Roving tabindex for delete buttons - only selected track's button is tabbable
-            const deleteBtn = item.querySelector('.track-delete');
-            if (deleteBtn) {
-                deleteBtn.setAttribute('tabindex', isSelected ? '0' : '-1');
-            }
+            item.setAttribute('aria-selected', i === index ? 'true' : 'false');
         });
 
-        // Focus the selected item
-        const selectedItem = trackList.querySelector(`[data-index="${index}"]`);
-        if (selectedItem) {
-            selectedItem.focus();
-        }
+        playButtonsContainer.querySelectorAll('.track-play').forEach((btn, i) => {
+            const isSelected = i === index;
+            btn.setAttribute('tabindex', isSelected ? '0' : '-1');
+            btn.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
+        });
+
+        deleteButtonsContainer.querySelectorAll('.track-delete').forEach((btn, i) => {
+            const isSelected = i === index;
+            btn.setAttribute('tabindex', isSelected ? '0' : '-1');
+            btn.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
+        });
+
+        // Set aria-activedescendant on listbox
+        trackList.setAttribute('aria-activedescendant', `track-option-${index}`);
+
+        // Ensure listbox has focus (screen reader will announce active descendant)
+        trackList.focus();
     }
 
     // Delete track
@@ -384,6 +424,11 @@
         if (isBurning) return;
 
         const track = tracks[index];
+
+        // Stop playback if this track is playing
+        if (playingTrackId === track.id) {
+            stopPlayback();
+        }
 
         try {
             await fetch(`/track/${track.id}`, { method: 'DELETE' });
@@ -412,6 +457,67 @@
         }
     }
 
+    // Toggle play/stop for a track
+    async function togglePlay(trackId, trackName) {
+        // If this track is playing, stop it
+        if (playingTrackId === trackId) {
+            stopPlayback();
+            return;
+        }
+
+        // Stop any current playback
+        if (audioPlayer) {
+            audioPlayer.pause();
+            audioPlayer = null;
+        }
+
+        // Start playing this track
+        playingTrackId = trackId;
+        updatePlayButtons();
+
+        audioPlayer = new Audio(`/audio/${trackId}`);
+
+        audioPlayer.addEventListener('ended', () => {
+            stopPlayback();
+        });
+
+        audioPlayer.addEventListener('error', () => {
+            showStatus(`Failed to play: ${trackName}`, 'error');
+            stopPlayback();
+        });
+
+        try {
+            await audioPlayer.play();
+            showStatus(`Playing: ${trackName}`);
+        } catch (err) {
+            showStatus(`Failed to play: ${trackName}`, 'error');
+            stopPlayback();
+        }
+    }
+
+    // Stop current playback
+    function stopPlayback() {
+        if (audioPlayer) {
+            audioPlayer.pause();
+            audioPlayer.src = '';
+            audioPlayer = null;
+        }
+        playingTrackId = null;
+        updatePlayButtons();
+    }
+
+    // Update play button states
+    function updatePlayButtons() {
+        playButtonsContainer.querySelectorAll('.track-play').forEach((btn) => {
+            const isPlaying = btn.dataset.trackId === playingTrackId;
+            btn.textContent = isPlaying ? '■' : '▶';
+            btn.title = isPlaying ? 'Stop track' : 'Play track';
+            btn.setAttribute('aria-label', isPlaying
+                ? `Stop ${btn.getAttribute('aria-label').replace(/^(Play|Stop) /, '')}`
+                : `Play ${btn.getAttribute('aria-label').replace(/^(Play|Stop) /, '')}`);
+        });
+    }
+
     // Move track
     async function moveTrack(fromIndex, toIndex) {
         if (toIndex < 0 || toIndex >= tracks.length) return;
@@ -438,6 +544,13 @@
 
     // Keyboard navigation
     function setupKeyboardNav() {
+        // When listbox receives focus, select first item if nothing selected
+        trackList.addEventListener('focus', () => {
+            if (tracks.length > 0 && selectedIndex < 0) {
+                selectTrack(0);
+            }
+        });
+
         trackList.addEventListener('keydown', (e) => {
             if (isBurning) return;
             if (tracks.length === 0) return;
@@ -463,6 +576,12 @@
                     e.preventDefault();
                     if (selectedIndex >= 0) {
                         deleteTrack(selectedIndex);
+                    }
+                } else if (key === ' ') {
+                    e.preventDefault();
+                    if (selectedIndex >= 0) {
+                        const track = tracks[selectedIndex];
+                        togglePlay(track.id, track.name);
                     }
                 }
                 return;
@@ -509,6 +628,8 @@
 
         clearBtn.addEventListener('click', async () => {
             if (isBurning || tracks.length === 0) return;
+
+            stopPlayback();
 
             try {
                 await fetch('/clear', { method: 'POST' });
