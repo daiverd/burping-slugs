@@ -1,8 +1,11 @@
 """Audio CD Burner - Flask web application."""
 
 import json
+import os
 import random
+import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -10,13 +13,88 @@ from flask import Flask, Response, jsonify, render_template, request
 
 from audio_utils import convert_to_cd_wav, get_duration
 from cd_utils import DEFAULT_CAPACITY_SECONDS, burn_cd, get_cd_capacity
+from url_downloader import (
+    DownloadJob,
+    JobStatus,
+    cleanup_job,
+    get_job,
+    parse_urls,
+    start_download,
+)
 
 app = Flask(__name__)
 
-# In-memory track storage (single-user local tool)
-tracks: list[dict] = []
-upload_dir = Path(tempfile.mkdtemp(prefix="cd-burner-"))
+# XDG data directory for persistence
+XDG_DATA_HOME = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+DATA_DIR = Path(XDG_DATA_HOME) / "burping-slugs"
+FILES_DIR = DATA_DIR / "files"
+CACHE_DIR = DATA_DIR / "cache"
+PLAYLIST_FILE = DATA_DIR / "playlist.json"
+
+# Ensure directories exist
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+FILES_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Temporary directory for WAV conversion (not persisted)
 wav_dir = Path(tempfile.mkdtemp(prefix="cd-burner-wav-"))
+
+# In-memory track storage (loaded from disk on startup)
+tracks: list[dict] = []
+
+# Playlist schema version
+PLAYLIST_VERSION = 1
+
+
+def load_playlist() -> None:
+    """Load playlist from disk on startup."""
+    global tracks
+    if not PLAYLIST_FILE.exists():
+        tracks = []
+        return
+
+    try:
+        with open(PLAYLIST_FILE) as f:
+            data = json.load(f)
+
+        if data.get("version") != PLAYLIST_VERSION:
+            # Future: handle migrations
+            tracks = []
+            return
+
+        loaded_tracks = []
+        for t in data.get("tracks", []):
+            filepath = FILES_DIR / t["filename"]
+            if filepath.exists():
+                loaded_tracks.append({
+                    "id": t["id"],
+                    "name": t["name"],
+                    "duration": t["duration"],
+                    "filepath": str(filepath),
+                    "source_url": t.get("source_url"),
+                })
+        tracks = loaded_tracks
+    except (json.JSONDecodeError, OSError, KeyError):
+        tracks = []
+
+
+def save_playlist() -> None:
+    """Save playlist to disk."""
+    data = {
+        "version": PLAYLIST_VERSION,
+        "tracks": [
+            {
+                "id": t["id"],
+                "name": t["name"],
+                "duration": t["duration"],
+                "filename": Path(t["filepath"]).name,
+                "source_url": t.get("source_url"),
+            }
+            for t in tracks
+        ],
+    }
+    with open(PLAYLIST_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 
 def sse_event(data: dict, event: str = None) -> str:
@@ -28,6 +106,10 @@ def sse_event(data: dict, event: str = None) -> str:
     lines.append("")
     lines.append("")
     return "\n".join(lines)
+
+
+# Load playlist on startup
+load_playlist()
 
 
 @app.route("/")
@@ -52,7 +134,7 @@ def upload():
         # Generate unique ID and save file
         track_id = str(uuid.uuid4())
         ext = Path(file.filename).suffix or ".audio"
-        filepath = upload_dir / f"{track_id}{ext}"
+        filepath = FILES_DIR / f"{track_id}{ext}"
         file.save(filepath)
 
         # Get duration
@@ -66,6 +148,7 @@ def upload():
             "name": file.filename,
             "duration": duration,
             "filepath": str(filepath),
+            "source_url": None,
         }
         tracks.append(track)
         new_tracks.append({
@@ -73,6 +156,9 @@ def upload():
             "name": file.filename,
             "duration": duration,
         })
+
+    if new_tracks:
+        save_playlist()
 
     return jsonify({"tracks": new_tracks})
 
@@ -100,6 +186,7 @@ def delete_track(track_id):
                 filepath.unlink()
             # Remove from list
             tracks.pop(i)
+            save_playlist()
             return jsonify({"success": True})
 
     return jsonify({"error": "Track not found"}), 404
@@ -123,6 +210,7 @@ def reorder():
             new_tracks.append(track_map[track_id])
 
     tracks = new_tracks
+    save_playlist()
     return jsonify({"success": True})
 
 
@@ -131,6 +219,7 @@ def randomize():
     """Shuffle track order."""
     global tracks
     random.shuffle(tracks)
+    save_playlist()
     return jsonify({
         "tracks": [
             {"id": t["id"], "name": t["name"], "duration": t["duration"]}
@@ -141,13 +230,14 @@ def randomize():
 
 @app.route("/clear", methods=["POST"])
 def clear_all():
-    """Remove all tracks."""
+    """Remove all tracks and their files."""
     global tracks
     for track in tracks:
         filepath = Path(track["filepath"])
         if filepath.exists():
             filepath.unlink()
     tracks = []
+    save_playlist()
     return jsonify({"success": True})
 
 
@@ -158,6 +248,116 @@ def cd_info():
     return jsonify({
         "capacity": capacity,  # None if no disc
         "default_capacity": DEFAULT_CAPACITY_SECONDS,
+    })
+
+
+@app.route("/download", methods=["POST"])
+def download():
+    """Start downloading URLs. Returns job IDs."""
+    data = request.get_json()
+    if not data or "text" not in data:
+        return jsonify({"error": "Missing text"}), 400
+
+    urls = parse_urls(data["text"])
+    if not urls:
+        return jsonify({"error": "No URLs found"}), 400
+
+    jobs = []
+
+    def on_complete(job: DownloadJob):
+        """Called when a download job completes."""
+        if job.status == JobStatus.COMPLETE and job.result:
+            # Copy file from cache to files dir
+            result = job.result
+            track_id = str(uuid.uuid4())
+            ext = result.filepath.suffix
+            dest_path = FILES_DIR / f"{track_id}{ext}"
+            shutil.copy2(result.filepath, dest_path)
+
+            track = {
+                "id": track_id,
+                "name": result.title,
+                "duration": result.duration,
+                "filepath": str(dest_path),
+                "source_url": result.source_url,
+            }
+            tracks.append(track)
+            save_playlist()
+
+    for url in urls:
+        job_id = start_download(url, CACHE_DIR, on_complete=on_complete)
+        jobs.append({"id": job_id, "url": url})
+
+    return jsonify({"jobs": jobs})
+
+
+@app.route("/download-progress")
+def download_progress():
+    """SSE stream for download progress."""
+    ids = request.args.get("ids", "").split(",")
+    ids = [i.strip() for i in ids if i.strip()]
+
+    if not ids:
+        return jsonify({"error": "No job IDs provided"}), 400
+
+    def generate():
+        pending = set(ids)
+
+        while pending:
+            for job_id in list(pending):
+                job = get_job(job_id)
+                if job is None:
+                    # Job not found, remove from pending
+                    pending.discard(job_id)
+                    yield sse_event({
+                        "id": job_id,
+                        "status": "not_found",
+                    }, "update")
+                    continue
+
+                yield sse_event({
+                    "id": job.id,
+                    "url": job.url,
+                    "status": job.status.value,
+                    "progress": job.progress,
+                    "message": job.message,
+                    "error": job.error,
+                    "result": {
+                        "title": job.result.title,
+                        "duration": job.result.duration,
+                    } if job.result else None,
+                }, "update")
+
+                if job.status in (JobStatus.COMPLETE, JobStatus.FAILED):
+                    pending.discard(job_id)
+                    cleanup_job(job_id)
+
+            if pending:
+                time.sleep(0.5)
+
+        yield sse_event({"done": True}, "complete")
+
+    return Response(generate(), mimetype="text/event-stream")
+
+
+@app.route("/job/<job_id>")
+def job_status(job_id):
+    """Get single job status (polling fallback)."""
+    job = get_job(job_id)
+    if job is None:
+        return jsonify({"error": "Job not found"}), 404
+
+    return jsonify({
+        "id": job.id,
+        "url": job.url,
+        "status": job.status.value,
+        "progress": job.progress,
+        "message": job.message,
+        "error": job.error,
+        "result": {
+            "title": job.result.title,
+            "duration": job.result.duration,
+        } if job.result else None,
     })
 
 
