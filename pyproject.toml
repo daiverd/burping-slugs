@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Burping Slug's Retro CD Burner - Audio CD burning web application"
 requires-python = ">=3.10"
 dependencies = [
+    "audio-url-transformer",
     "flask>=3.0",
     "supervisor>=4.3.0",
 ]
+
+[tool.uv.sources]
+audio-url-transformer = { git = "https://github.com/accessibleapps/audio_url_transformer" }
