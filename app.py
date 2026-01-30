@@ -204,31 +204,22 @@ def burn():
                 "message": f"Converted track {track_num} of {len(tracks)}",
             }, "progress")
 
-        # Burn to disc - collect progress via list since callback can't yield
-        progress_updates = []
-
-        def progress_callback(track: int, percent: int, message: str):
-            progress_updates.append({
-                "track": track,
-                "percent": percent,
-                "status": "burning",
-                "message": message,
-            })
-
-        # Start burn (this blocks)
-        yield sse_event({
-            "track": 1,
-            "percent": 0,
-            "status": "burning",
-            "message": "Starting burn...",
-        }, "progress")
-
-        success, message = burn_cd(wav_files, progress_callback, dummy=dummy, gaps=gaps)
-
-        yield sse_event({
-            "success": success,
-            "message": message,
-        }, "complete")
+        # Burn to disc - iterate over generator for real-time progress
+        for update in burn_cd(wav_files, dummy=dummy, gaps=gaps):
+            if update[0] == "progress":
+                _, track, percent, message = update
+                yield sse_event({
+                    "track": track,
+                    "percent": percent,
+                    "status": "burning",
+                    "message": message,
+                }, "progress")
+            elif update[0] == "result":
+                _, success, message = update
+                yield sse_event({
+                    "success": success,
+                    "message": message,
+                }, "complete")
 
         # Clean up WAV files
         for wav_file in wav_files:

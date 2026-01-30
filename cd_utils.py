@@ -3,7 +3,6 @@
 import re
 import subprocess
 from pathlib import Path
-from typing import Callable
 
 # Default CD capacity in seconds (80 minute disc)
 DEFAULT_CAPACITY_SECONDS = 80 * 60
@@ -53,25 +52,27 @@ def get_cd_capacity(device: str = "/dev/sr0") -> int | None:
 
 def burn_cd(
     wav_files: list[Path],
-    progress_callback: Callable[[int, int, str], None],
     device: str = "/dev/sr0",
     dummy: bool = False,
     gaps: bool = True,
-) -> tuple[bool, str]:
+):
     """Burn WAV files to audio CD.
+
+    Generator that yields progress updates and final result.
 
     Args:
         wav_files: List of WAV file paths in track order
-        progress_callback: Called with (track_num, percent, status_message)
         device: CD device path
         dummy: If True, perform dry run without actually burning
         gaps: If True, use 2-second gaps between tracks (default). If False, no gaps.
 
-    Returns:
-        Tuple of (success: bool, message: str)
+    Yields:
+        ("progress", track_num, percent, message) for progress updates
+        ("result", success, message) as final yield
     """
     if not wav_files:
-        return False, "No tracks to burn"
+        yield ("result", False, "No tracks to burn")
+        return
 
     # Build wodim command
     cmd = [
@@ -119,27 +120,27 @@ def burn_cd(
 
                 if track_num != current_track:
                     current_track = track_num
-                    progress_callback(current_track, 0, f"Burning track {current_track} of {total_tracks}")
+                    yield ("progress", current_track, 0, f"Burning track {current_track} of {total_tracks}")
 
                 if total_mb > 0:
                     percent = min(100, int(written_mb * 100 / total_mb))
-                    progress_callback(current_track, percent, f"Burning track {current_track} of {total_tracks}")
+                    yield ("progress", current_track, percent, f"Burning track {current_track} of {total_tracks}")
 
             # Fixating: "Fixating..."
             if "Fixating" in line:
-                progress_callback(total_tracks, 100, "Fixating disc...")
+                yield ("progress", total_tracks, 100, "Fixating disc...")
 
         process.wait()
 
         if process.returncode == 0:
-            return True, "Burn completed successfully"
+            yield ("result", True, "Burn completed successfully")
         else:
             # Find error lines (wodim prefixes errors with "wodim:")
             error_lines = [l for l in output_lines if l.startswith("wodim:") or "Cannot" in l or "error" in l.lower()]
             error_detail = "; ".join(error_lines[-3:]) if error_lines else "unknown error"
-            return False, f"Burn failed (exit {process.returncode}): {error_detail}"
+            yield ("result", False, f"Burn failed (exit {process.returncode}): {error_detail}")
 
     except FileNotFoundError:
-        return False, "wodim not found - please install cdrecord/wodim"
+        yield ("result", False, "wodim not found - please install cdrecord/wodim")
     except Exception as e:
-        return False, f"Burn failed: {str(e)}"
+        yield ("result", False, f"Burn failed: {str(e)}")
