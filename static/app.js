@@ -42,7 +42,7 @@
     let playingTrackId = null;
 
     // URL pattern for detecting URLs in pasted text
-    const URL_PATTERN = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
+    const URL_PATTERN = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/;
 
     // Initialize
     function init() {
