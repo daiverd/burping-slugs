@@ -386,7 +386,7 @@
             downloadBtn.textContent = '↓';
             downloadBtn.dataset.trackId = track.id;
 
-            downloadBtn.addEventListener('click', () => downloadTrack(track.id, track.name));
+            downloadBtn.addEventListener('click', () => downloadTrack(track.id));
             downloadButtonsContainer.appendChild(downloadBtn);
         });
 
@@ -480,10 +480,9 @@
     }
 
     // Download track
-    function downloadTrack(trackId, trackName) {
+    function downloadTrack(trackId) {
         const link = document.createElement('a');
-        link.href = `/audio/${trackId}`;
-        link.download = trackName;
+        link.href = `/audio/${trackId}?download=true`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);

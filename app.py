@@ -243,11 +243,20 @@ def clear_all():
 
 @app.route("/audio/<track_id>")
 def serve_audio(track_id):
-    """Serve audio file for playback."""
+    """Serve audio file for playback or download."""
+    download = request.args.get("download", "false").lower() == "true"
+
     for track in tracks:
         if track["id"] == track_id:
             filepath = Path(track["filepath"])
             if filepath.exists():
+                if download:
+                    # Build download name from track name + original extension
+                    ext = filepath.suffix
+                    download_name = track["name"]
+                    if not download_name.lower().endswith(ext.lower()):
+                        download_name += ext
+                    return send_file(filepath, as_attachment=True, download_name=download_name)
                 return send_file(filepath)
             break
     return jsonify({"error": "Track not found"}), 404
