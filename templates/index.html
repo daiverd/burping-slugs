@@ -17,7 +17,15 @@
                 <button type="button" id="browse-btn">Browse Files</button>
                 <input type="file" id="file-input" multiple accept="audio/*" hidden aria-label="Select audio files">
             </div>
-            <p id="upload-hint" class="hint">Supports any audio format (MP3, FLAC, WAV, OGG, etc.)</p>
+            <p id="upload-hint" class="hint">Supports any audio format (MP3, FLAC, WAV, OGG, etc.) or paste URLs (YouTube, SoundCloud, etc.)</p>
+        </section>
+
+        <!-- Download progress -->
+        <section id="download-section" aria-label="Download progress" hidden>
+            <h2>Downloading</h2>
+            <ul id="download-list" aria-live="polite">
+                <!-- Download items inserted here -->
+            </ul>
         </section>
 
         <!-- Track list -->
@@ -40,7 +48,7 @@
         <section aria-label="CD capacity" id="capacity-section">
             <h2>Disc Capacity</h2>
             <div class="capacity-bar">
-                <progress id="capacity-progress" max="4800" value="0"></progress>
+                <progress id="capacity-progress" max="80" value="0"></progress>
                 <p id="capacity-text" aria-live="polite">0:00 / 80:00 (0%)</p>
             </div>
             <p id="disc-status" aria-live="polite">Checking for disc...</p>

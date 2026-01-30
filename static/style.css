@@ -349,6 +349,74 @@ progress::-moz-progress-bar {
     margin: 0 0 var(--space-sm) 0;
 }
 
+/* Download section */
+#download-section {
+    background-color: var(--color-surface);
+    border-radius: 8px;
+    padding: var(--space-md);
+}
+
+#download-section[hidden] {
+    display: none;
+}
+
+#download-section h2 {
+    margin-top: 0;
+    margin-bottom: var(--space-md);
+}
+
+#download-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.download-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background-color: var(--color-surface-alt);
+    border-radius: 4px;
+    margin-bottom: var(--space-xs);
+    font-size: 0.875rem;
+}
+
+.download-item:last-child {
+    margin-bottom: 0;
+}
+
+.download-status {
+    font-weight: 600;
+    min-width: 4rem;
+}
+
+.download-complete .download-status {
+    color: var(--color-success);
+}
+
+.download-failed .download-status {
+    color: var(--color-danger);
+}
+
+.download-downloading .download-status,
+.download-processing .download-status {
+    color: var(--color-primary);
+}
+
+.download-url {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--color-text-muted);
+}
+
+.download-message {
+    color: var(--color-text-muted);
+    text-align: right;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     body {

@@ -22,6 +22,8 @@
     const progressContainer = document.getElementById('progress-container');
     const progressText = document.getElementById('progress-text');
     const burnProgress = document.getElementById('burn-progress');
+    const downloadSection = document.getElementById('download-section');
+    const downloadList = document.getElementById('download-list');
 
     // State
     let tracks = [];
@@ -29,6 +31,11 @@
     let cdCapacity = 80 * 60; // Default 80 minutes in seconds
     let hasDisc = false;
     let isBurning = false;
+    let isDownloading = false;
+    let activeDownloads = new Map(); // job_id -> {url, status, progress, message}
+
+    // URL pattern for detecting URLs in pasted text
+    const URL_PATTERN = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
 
     // Initialize
     function init() {
@@ -36,6 +43,7 @@
         setupFileInput();
         setupKeyboardNav();
         setupButtons();
+        loadTracks();
         checkCdInfo();
 
         // Check CD info periodically
@@ -43,6 +51,26 @@
 
         // Update capacity when gap setting changes
         trackGaps.addEventListener('change', updateCapacity);
+    }
+
+    // Load existing tracks from server on page load
+    async function loadTracks() {
+        try {
+            const response = await fetch('/tracks');
+            const data = await response.json();
+            if (data.tracks) {
+                tracks = data.tracks;
+                renderTracks();
+                updateCapacity();
+            }
+        } catch (error) {
+            console.error('Failed to load tracks:', error);
+        }
+    }
+
+    // Check if text contains URLs
+    function containsUrls(text) {
+        return URL_PATTERN.test(text);
     }
 
     // Dropzone setup
@@ -72,14 +100,159 @@
             }
         });
 
-        // Paste handler
+        // Paste handler - check for URLs or files
         document.addEventListener('paste', (e) => {
             if (isBurning) return;
+
+            // Check for text with URLs first
+            const text = e.clipboardData?.getData('text');
+            if (text && containsUrls(text)) {
+                e.preventDefault();
+                downloadUrls(text);
+                return;
+            }
+
+            // Fall back to file paste
             const files = e.clipboardData?.files;
             if (files && files.length > 0) {
                 uploadFiles(files);
             }
         });
+    }
+
+    // Download URLs from pasted text
+    async function downloadUrls(text) {
+        if (isDownloading) {
+            showStatus('Download already in progress', 'warning');
+            return;
+        }
+
+        showStatus('Starting download...');
+
+        try {
+            const response = await fetch('/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text }),
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                showStatus(data.error, 'error');
+                return;
+            }
+
+            if (!data.jobs || data.jobs.length === 0) {
+                showStatus('No downloadable URLs found', 'warning');
+                return;
+            }
+
+            // Start tracking downloads
+            isDownloading = true;
+            activeDownloads.clear();
+
+            for (const job of data.jobs) {
+                activeDownloads.set(job.id, {
+                    url: job.url,
+                    status: 'pending',
+                    progress: 0,
+                    message: 'Starting...',
+                });
+            }
+
+            renderDownloads();
+            downloadSection.hidden = false;
+
+            // Connect to SSE for progress updates
+            const jobIds = data.jobs.map(j => j.id).join(',');
+            const eventSource = new EventSource(`/download-progress?ids=${jobIds}`);
+
+            eventSource.addEventListener('update', (e) => {
+                const update = JSON.parse(e.data);
+                if (activeDownloads.has(update.id)) {
+                    activeDownloads.set(update.id, {
+                        url: update.url,
+                        status: update.status,
+                        progress: update.progress,
+                        message: update.message,
+                        result: update.result,
+                        error: update.error,
+                    });
+                    renderDownloads();
+
+                    // If completed successfully, refresh track list
+                    if (update.status === 'complete' && update.result) {
+                        loadTracks();
+                    }
+                }
+            });
+
+            eventSource.addEventListener('complete', (e) => {
+                eventSource.close();
+                isDownloading = false;
+
+                // Count results
+                let completed = 0;
+                let failed = 0;
+                for (const dl of activeDownloads.values()) {
+                    if (dl.status === 'complete') completed++;
+                    if (dl.status === 'failed') failed++;
+                }
+
+                if (failed > 0) {
+                    showStatus(`Downloaded ${completed} track(s), ${failed} failed`, completed > 0 ? 'warning' : 'error');
+                } else {
+                    showStatus(`Downloaded ${completed} track(s)`);
+                }
+
+                // Hide download section after a delay
+                setTimeout(() => {
+                    downloadSection.hidden = true;
+                    activeDownloads.clear();
+                    renderDownloads();
+                }, 3000);
+            });
+
+            eventSource.onerror = () => {
+                eventSource.close();
+                isDownloading = false;
+                showStatus('Download connection lost', 'error');
+            };
+
+        } catch (error) {
+            showStatus('Download failed: ' + error.message, 'error');
+            isDownloading = false;
+        }
+    }
+
+    // Render download progress list
+    function renderDownloads() {
+        downloadList.innerHTML = '';
+
+        for (const [id, dl] of activeDownloads) {
+            const li = document.createElement('li');
+            li.className = `download-item download-${dl.status}`;
+
+            // Truncate URL for display
+            let displayUrl = dl.url;
+            if (displayUrl.length > 50) {
+                displayUrl = displayUrl.substring(0, 47) + '...';
+            }
+
+            let statusIcon = '';
+            if (dl.status === 'complete') statusIcon = '[Done] ';
+            else if (dl.status === 'failed') statusIcon = '[Failed] ';
+            else if (dl.status === 'downloading' || dl.status === 'processing') statusIcon = `[${Math.round(dl.progress)}%] `;
+
+            li.innerHTML = `
+                <span class="download-status">${statusIcon}</span>
+                <span class="download-url" title="${escapeHtml(dl.url)}">${escapeHtml(displayUrl)}</span>
+                <span class="download-message">${escapeHtml(dl.message)}</span>
+            `;
+
+            downloadList.appendChild(li);
+        }
     }
 
     // File input setup
@@ -372,7 +545,7 @@
                 discStatus.className = 'disc-absent';
             }
 
-            capacityProgress.max = cdCapacity;
+            capacityProgress.max = Math.round(cdCapacity / 60);
             updateCapacity();
             updateBurnButton();
         } catch (error) {
@@ -389,7 +562,7 @@
         const percent = cdCapacity > 0 ? Math.round((totalDuration / cdCapacity) * 100) : 0;
         const isOver = totalDuration > cdCapacity;
 
-        capacityProgress.value = Math.min(totalDuration, cdCapacity);
+        capacityProgress.value = Math.round(Math.min(totalDuration, cdCapacity) / 60 * 100) / 100;
         capacityProgress.dataset.over = isOver ? 'true' : 'false';
 
         capacityText.textContent = `${formatDuration(totalDuration)} / ${formatDuration(cdCapacity)} (${percent}%)`;
