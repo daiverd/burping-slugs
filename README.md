@@ -10,6 +10,7 @@ A web-based audio CD burning application. Upload audio files or paste URLs, arra
 - Track reordering with keyboard or mouse
 - Shuffle/randomize track order
 - Audio preview - play/stop tracks before burning
+- Download tracks to local machine
 - Real-time burn progress via SSE
 - Automatic audio conversion to CD-compatible WAV (44.1kHz/16-bit stereo)
 - Two-pass EBU R128 loudness normalization (-14 LUFS) for consistent volume
@@ -90,6 +91,6 @@ Tracks and downloaded files are stored in `~/.local/share/burping-slugs/`:
 | `/download` | POST | Download from URLs |
 | `/download-progress` | GET | Download progress (SSE stream) |
 | `/job/<id>` | GET | Get download job status |
-| `/audio/<id>` | GET | Stream track audio |
+| `/audio/<id>` | GET | Stream track audio (`?download=true` to download) |
 
 Burn parameters: `?dummy=true` for dry run, `?gaps=false` for gapless.
