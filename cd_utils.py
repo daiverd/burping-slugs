@@ -133,6 +133,12 @@ def burn_cd(
         process.wait()
 
         if process.returncode == 0:
+            # Eject disc after successful burn (not in dummy mode)
+            if not dummy:
+                try:
+                    subprocess.run(["eject", device], timeout=30)
+                except Exception:
+                    pass  # Eject failure is not critical
             yield ("result", True, "Burn completed successfully")
         else:
             # Find error lines (wodim prefixes errors with "wodim:")
