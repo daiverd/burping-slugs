@@ -11,11 +11,14 @@ DEFAULT_CAPACITY_SECONDS = 80 * 60
 def get_cd_capacity(device: str = "/dev/sr0") -> int | None:
     """Get CD capacity in seconds by reading ATIP info.
 
+    If a non-writable disc is detected (already burned/finalized),
+    it will be ejected automatically.
+
     Args:
         device: CD device path
 
     Returns:
-        Capacity in seconds, or None if no disc/device
+        Capacity in seconds, or None if no disc/device/not writable
     """
     try:
         result = subprocess.run(
@@ -25,19 +28,23 @@ def get_cd_capacity(device: str = "/dev/sr0") -> int | None:
             timeout=30,
         )
 
+        output = result.stdout + result.stderr
+
+        # Check if disc is writable (incomplete = blank/appendable)
+        # "Disc status: incomplete" means writable
+        # "Disc status: complete" means finalized/not writable
+        if "Disc status: complete" in output:
+            # Eject non-writable disc
+            try:
+                subprocess.run(["eject", device], timeout=30)
+            except Exception:
+                pass
+            return None
+
         # Parse output for lead-out time (indicates disc capacity)
         # Format: "ATIP start of lead out: 359849 (79:57/74)"
         # The time in parentheses is MM:SS/frames
-        for line in result.stdout.split("\n"):
-            if "ATIP start of lead out" in line:
-                match = re.search(r"\((\d+):(\d+)/\d+\)", line)
-                if match:
-                    minutes = int(match.group(1))
-                    seconds = int(match.group(2))
-                    return minutes * 60 + seconds
-
-        # Also check stderr (wodim outputs there too)
-        for line in result.stderr.split("\n"):
+        for line in output.split("\n"):
             if "ATIP start of lead out" in line:
                 match = re.search(r"\((\d+):(\d+)/\d+\)", line)
                 if match:
