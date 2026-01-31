@@ -762,6 +762,7 @@
         renderTracks();
         updateBurnButton();
 
+        statusDiv.textContent = '';  // Clear status to avoid duplication
         progressContainer.hidden = false;
         burnProgress.value = 0;
         progressText.textContent = 'Starting burn process...';
@@ -773,11 +774,6 @@
             const data = JSON.parse(e.data);
             progressText.textContent = data.message;
             burnProgress.value = data.percent;
-
-            // Announce to screen readers at intervals
-            if (data.percent % 25 === 0) {
-                showStatus(data.message);
-            }
         });
 
         eventSource.addEventListener('complete', (e) => {
