@@ -127,7 +127,7 @@ def convert_to_cd_wav(input_path: Path, output_path: Path, normalize: bool = Tru
                 *af_args,
                 "-ar", "44100",      # Sample rate
                 "-ac", "2",          # Stereo
-                "-sample_fmt", "s16",  # 16-bit signed
+                "-acodec", "pcm_s16le",  # 16-bit signed little-endian PCM
                 "-f", "wav",
                 str(output_path),
             ],
