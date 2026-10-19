@@ -39,6 +39,7 @@
     let dataCapacity = 700; // Default 700 MB
     let hasDisc = false;
     let isBurning = false;
+    let lastShownBurnId = null; // burn whose result we've already announced
     let isDownloading = false;
     let activeDownloads = new Map(); // job_id -> {url, status, progress, message}
     let cdType = 'audio'; // 'audio' or 'mp3'
@@ -59,6 +60,7 @@
         setupCdTypeToggle();
         loadTracks();
         checkCdInfo();
+        subscribeBurnState();
 
         // Check CD info periodically
         setInterval(checkCdInfo, 5000);
@@ -1275,50 +1277,69 @@
         burnBtn.title = reason;
     }
 
-    // Start burn process using Server-Sent Events
-    function startBurn() {
+    // Ask the server to start a burn. It runs in the background on the server;
+    // progress arrives through the shared burn state stream.
+    async function startBurn() {
         if (isBurning || tracks.length === 0) return;
 
-        isBurning = true;
-        renderTracks();
-        updateBurnButton();
-
+        burnBtn.disabled = true;
         statusDiv.textContent = '';  // Clear status to avoid duplication
-        progressContainer.hidden = false;
-        burnProgress.value = 0;
-        progressText.textContent = 'Starting burn process...';
 
-        const url = `/burn?dummy=${dummyMode.checked}&gaps=${trackGaps.checked}&cd_type=${cdType}`;
-        const eventSource = new EventSource(url);
-
-        eventSource.addEventListener('progress', (e) => {
-            const data = JSON.parse(e.data);
-            progressText.textContent = data.message;
-            burnProgress.value = data.percent;
-        });
-
-        eventSource.addEventListener('complete', (e) => {
-            const data = JSON.parse(e.data);
-            eventSource.close();
-
-            isBurning = false;
-            progressContainer.hidden = true;
-            renderTracks();
-
-            if (data.success) {
-                showStatus(data.message, 'success');
-            } else {
-                showStatus(data.message, 'error');
+        try {
+            const response = await fetch('/burn', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    dummy: dummyMode.checked,
+                    gaps: trackGaps.checked,
+                    cd_type: cdType,
+                }),
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                showStatus(data.error || 'Failed to start burn', 'error');
+                updateBurnButton();
             }
-        });
+        } catch (error) {
+            showStatus('Failed to start burn', 'error');
+            updateBurnButton();
+        }
+    }
 
-        eventSource.onerror = () => {
-            eventSource.close();
-            isBurning = false;
+    // Follow the server's burn state. Every tab and device sees the same burn,
+    // and EventSource reconnects on its own if the connection drops.
+    function subscribeBurnState() {
+        const eventSource = new EventSource('/burn-events');
+        eventSource.addEventListener('state', (e) => applyBurnState(JSON.parse(e.data)));
+    }
+
+    function applyBurnState(state) {
+        const wasBurning = isBurning;
+        isBurning = state.status === 'running';
+
+        if (isBurning) {
+            progressContainer.hidden = false;
+            progressText.textContent = (state.dummy ? 'Test mode: ' : '') + state.message;
+            burnProgress.value = state.percent;
+        } else {
             progressContainer.hidden = true;
+        }
+
+        // Announce a finished burn once: if we watched it, or it ended in the last 10 minutes
+        if (state.status === 'done' && state.id !== lastShownBurnId) {
+            lastShownBurnId = state.id;
+            if (wasBurning || state.now - state.finished_at < 600) {
+                showStatus(state.message, state.success ? 'success' : 'error');
+            }
+        }
+
+        if (wasBurning !== isBurning) {
             renderTracks();
-            showStatus('Connection lost during burn', 'error');
-        };
+            updateBurnButton();
+            if (!isBurning) {
+                checkCdInfo();
+            }
+        }
     }
 
     // Show status message

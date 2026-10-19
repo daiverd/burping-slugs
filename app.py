@@ -6,6 +6,7 @@ import os
 import random
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -141,6 +142,46 @@ def sse_event(data: dict, event: str = None) -> str:
 # Load playlist on startup
 load_playlist()
 
+# Burn job state, shared by every connected client. Burns run in a background
+# thread so they finish even if the browser that started them goes away.
+burn_changed = threading.Condition()
+burn_state = {
+    "version": 0,
+    "id": None,
+    "status": "idle",  # "idle", "running" or "done"
+    "cd_type": None,
+    "dummy": False,
+    "track": 0,
+    "percent": 0,
+    "message": "",
+    "success": None,
+    "started_at": None,
+    "finished_at": None,
+}
+
+# Held while anything talks to the drive, so a capacity check never runs mid-burn
+drive_lock = threading.Lock()
+last_cd_info: dict = {"capacity": None, "data_capacity": None}
+
+
+def update_burn_state(**changes) -> None:
+    """Apply changes to the burn state and wake up clients waiting on it."""
+    with burn_changed:
+        burn_state.update(changes)
+        burn_state["version"] += 1
+        burn_changed.notify_all()
+
+
+def is_burning() -> bool:
+    with burn_changed:
+        return burn_state["status"] == "running"
+
+
+def reject_if_burning():
+    """Return a 409 response if a burn is running, else None."""
+    if is_burning():
+        return jsonify({"error": "Burn in progress"}), 409
+    return None
 
 
 @app.route("/")
@@ -152,6 +193,8 @@ def index():
 @app.route("/upload", methods=["POST"])
 def upload():
     """Handle file uploads. Returns list of track info."""
+    if rejected := reject_if_burning():
+        return rejected
     if "files" not in request.files:
         return jsonify({"error": "No files provided"}), 400
 
@@ -239,6 +282,8 @@ def get_tracks():
 def delete_track(track_id):
     """Remove a track from the queue."""
     global tracks
+    if rejected := reject_if_burning():
+        return rejected
     for i, track in enumerate(tracks):
         if track["id"] == track_id:
             # Remove original file
@@ -265,6 +310,8 @@ def delete_track(track_id):
 def reorder():
     """Update track order."""
     global tracks
+    if rejected := reject_if_burning():
+        return rejected
     data = request.get_json()
     if not data or "order" not in data:
         return jsonify({"error": "Missing order"}), 400
@@ -287,6 +334,8 @@ def reorder():
 def set_cd_type():
     """Set CD type (audio or mp3)."""
     global cd_type
+    if rejected := reject_if_burning():
+        return rejected
     data = request.get_json()
     if not data or "cd_type" not in data:
         return jsonify({"error": "Missing cd_type"}), 400
@@ -304,6 +353,8 @@ def set_cd_type():
 def randomize():
     """Shuffle track order."""
     global tracks
+    if rejected := reject_if_burning():
+        return rejected
     random.shuffle(tracks)
     save_playlist()
     return jsonify({
@@ -324,6 +375,8 @@ def randomize():
 def clear_all():
     """Remove all tracks and their files."""
     global tracks
+    if rejected := reject_if_burning():
+        return rejected
     # Remove original files
     for track in tracks:
         filepath = Path(track["filepath"])
@@ -365,14 +418,24 @@ def serve_audio(track_id):
 
 @app.route("/cd-info", methods=["GET"])
 def cd_info():
-    """Get CD capacity info."""
-    capacity = get_cd_capacity()
-    data_capacity = get_data_cd_capacity()
+    """Get CD capacity info.
+
+    While a burn is running (or another check holds the drive), returns the
+    last known values instead of querying the drive.
+    """
+    burning = is_burning()
+    if not burning and drive_lock.acquire(blocking=False):
+        try:
+            last_cd_info["capacity"] = get_cd_capacity()
+            last_cd_info["data_capacity"] = get_data_cd_capacity()
+        finally:
+            drive_lock.release()
     return jsonify({
-        "capacity": capacity,  # None if no disc (seconds)
+        "capacity": last_cd_info["capacity"],  # None if no disc (seconds)
         "default_capacity": DEFAULT_CAPACITY_SECONDS,
-        "data_capacity": data_capacity,  # None if no disc (MB)
+        "data_capacity": last_cd_info["data_capacity"],  # None if no disc (MB)
         "default_data_capacity": DEFAULT_DATA_CAPACITY_MB,
+        "burning": burning,
     })
 
 
@@ -501,7 +564,7 @@ def _strip_leading_numbers(name: str) -> str:
     return re.sub(r"^\d+[\s._-]*", "", name)
 
 
-def _build_mp3_staging_dir(staging_path: Path):
+def _build_mp3_staging_dir(burn_tracks: list[dict], staging_path: Path):
     """Build staging directory with numbered folders and files.
 
     Creates directory structure like:
@@ -557,7 +620,7 @@ def _build_mp3_staging_dir(staging_path: Path):
 
         return staging_path.joinpath(*numbered_parts)
 
-    for i, track in enumerate(tracks):
+    for i, track in enumerate(burn_tracks):
         original_folder = track.get("folder", "")
         original_name = track["name"]
 
@@ -591,34 +654,101 @@ def _build_mp3_staging_dir(staging_path: Path):
         yield (i, original_name, dest)
 
 
-@app.route("/burn", methods=["GET"])
+@app.route("/burn", methods=["POST"])
 def burn():
-    """Burn CD with SSE progress updates."""
-    dummy = request.args.get("dummy", "false").lower() == "true"
-    gaps = request.args.get("gaps", "true").lower() == "true"
-    cd_type = request.args.get("cd_type", "audio")  # "audio" or "mp3"
+    """Start a burn in the background. Progress is reported via /burn-events."""
+    data = request.get_json(silent=True) or {}
+    dummy = bool(data.get("dummy", False))
+    gaps = bool(data.get("gaps", True))
+    burn_type = data.get("cd_type", "audio")  # "audio" or "mp3"
+    if burn_type not in ("audio", "mp3"):
+        return jsonify({"error": "Invalid cd_type"}), 400
 
-    def generate():
+    with burn_changed:
+        if burn_state["status"] == "running":
+            return jsonify({"error": "A burn is already in progress"}), 409
         if not tracks:
-            yield sse_event({"success": False, "message": "No tracks to burn"}, "complete")
-            return
+            return jsonify({"error": "No tracks to burn"}), 400
+        # Snapshot so playlist changes can't affect a burn in progress
+        burn_tracks = list(tracks)
+        update_burn_state(
+            id=str(uuid.uuid4()),
+            status="running",
+            cd_type=burn_type,
+            dummy=dummy,
+            track=0,
+            percent=0,
+            message="Starting burn process...",
+            success=None,
+            started_at=time.time(),
+            finished_at=None,
+        )
 
-        if cd_type == "mp3":
-            # MP3 CD burn
-            yield from _burn_mp3_cd(dummy)
-        else:
-            # Audio CD burn (original behavior)
-            yield from _burn_audio_cd(dummy, gaps)
+    logger.info(
+        "Starting %s CD burn of %d tracks (dummy=%s, gaps=%s)",
+        burn_type, len(burn_tracks), dummy, gaps,
+    )
+    threading.Thread(
+        target=_run_burn,
+        args=(burn_tracks, burn_type, dummy, gaps),
+        daemon=True,
+    ).start()
+    return jsonify({"success": True})
 
-    return Response(generate(), mimetype="text/event-stream")
+
+@app.route("/burn-events")
+def burn_events():
+    """SSE stream of the burn state. Sends the current state on connect, then every change."""
+    def generate():
+        seen = None
+        while True:
+            with burn_changed:
+                if burn_state["version"] == seen:
+                    burn_changed.wait(timeout=15)
+                state = dict(burn_state)
+            if state["version"] == seen:
+                # Keepalive, also lets us notice a disconnected client
+                yield ": keepalive\n\n"
+                continue
+            seen = state["version"]
+            state["now"] = time.time()
+            yield sse_event(state, "state")
+
+    return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
-def _burn_audio_cd(dummy: bool, gaps: bool):
-    """Generator for audio CD burn process."""
+def _run_burn(burn_tracks: list[dict], burn_type: str, dummy: bool, gaps: bool) -> None:
+    """Run a burn to completion, recording progress in burn_state."""
+    success, message = False, "Burn ended without a result"
+    try:
+        # Wait for any in-flight capacity check to release the drive
+        with drive_lock:
+            if burn_type == "mp3":
+                steps = _burn_mp3_cd(burn_tracks, dummy)
+            else:
+                steps = _burn_audio_cd(burn_tracks, dummy, gaps)
+            for event, data in steps:
+                if event == "progress":
+                    update_burn_state(track=data["track"], percent=data["percent"], message=data["message"])
+                else:
+                    success, message = data["success"], data["message"]
+    except Exception as e:
+        logger.exception("Burn crashed")
+        success, message = False, f"Burn failed: {e}"
+
+    if success:
+        logger.info("Burn finished: %s", message)
+    else:
+        logger.warning("Burn failed: %s", message)
+    update_burn_state(status="done", success=success, message=message, finished_at=time.time())
+
+
+def _burn_audio_cd(burn_tracks: list[dict], dummy: bool, gaps: bool):
+    """Generator for audio CD burn process. Yields (event, data) tuples."""
     wav_files = []
 
     # Convert all tracks to CD-compatible WAV (cached by track ID)
-    for i, track in enumerate(tracks):
+    for i, track in enumerate(burn_tracks):
         track_num = i + 1
         track_id = track["id"]
         input_path = Path(track["filepath"])
@@ -626,34 +756,34 @@ def _burn_audio_cd(dummy: bool, gaps: bool):
 
         # Check if cached WAV already exists
         if output_path.exists():
-            yield sse_event({
+            yield "progress", {
                 "track": track_num,
                 "percent": 100,
                 "status": "converting",
                 "message": f"Using cached WAV for track {track_num}: {track['name']}",
-            }, "progress")
+            }
         else:
-            yield sse_event({
+            yield "progress", {
                 "track": track_num,
                 "percent": 0,
                 "status": "converting",
-                "message": f"Converting track {track_num} of {len(tracks)}: {track['name']}",
-            }, "progress")
+                "message": f"Converting track {track_num} of {len(burn_tracks)}: {track['name']}",
+            }
 
             success = convert_to_cd_wav(input_path, output_path)
             if not success:
-                yield sse_event({
+                yield "complete", {
                     "success": False,
                     "message": f"Failed to convert track {track_num}: {track['name']}",
-                }, "complete")
+                }
                 return
 
-            yield sse_event({
+            yield "progress", {
                 "track": track_num,
                 "percent": 100,
                 "status": "converting",
-                "message": f"Converted track {track_num} of {len(tracks)}",
-            }, "progress")
+                "message": f"Converted track {track_num} of {len(burn_tracks)}",
+            }
 
         wav_files.append(output_path)
 
@@ -661,24 +791,24 @@ def _burn_audio_cd(dummy: bool, gaps: bool):
     for update in burn_cd(wav_files, dummy=dummy, gaps=gaps):
         if update[0] == "progress":
             _, track, percent, message = update
-            yield sse_event({
+            yield "progress", {
                 "track": track,
                 "percent": percent,
                 "status": "burning",
                 "message": message,
-            }, "progress")
+            }
         elif update[0] == "result":
             _, success, message = update
-            yield sse_event({
+            yield "complete", {
                 "success": success,
                 "message": message,
-            }, "complete")
+            }
 
 
-def _burn_mp3_cd(dummy: bool):
-    """Generator for MP3 CD burn process."""
+def _burn_mp3_cd(burn_tracks: list[dict], dummy: bool):
+    """Generator for MP3 CD burn process. Yields (event, data) tuples."""
     # Step 1: Ensure all tracks are cached as normalized MP3s
-    for i, track in enumerate(tracks):
+    for i, track in enumerate(burn_tracks):
         track_num = i + 1
         track_id = track["id"]
         input_path = Path(track["filepath"])
@@ -686,20 +816,20 @@ def _burn_mp3_cd(dummy: bool):
 
         # Check if cached MP3 already exists
         if cache_path.exists():
-            yield sse_event({
+            yield "progress", {
                 "track": track_num,
                 "percent": 100,
                 "status": "converting",
                 "message": f"Using cached MP3 for track {track_num}: {track['name']}",
-            }, "progress")
+            }
             continue
 
-        yield sse_event({
+        yield "progress", {
             "track": track_num,
             "percent": 0,
             "status": "converting",
-            "message": f"Processing track {track_num} of {len(tracks)}: {track['name']}",
-        }, "progress")
+            "message": f"Processing track {track_num} of {len(burn_tracks)}: {track['name']}",
+        }
 
         # Determine processing needed
         if is_mp3(input_path):
@@ -715,26 +845,26 @@ def _burn_mp3_cd(dummy: bool):
             success = convert_to_mp3(input_path, cache_path, normalize=True)
 
         if not success:
-            yield sse_event({
+            yield "complete", {
                 "success": False,
                 "message": f"Failed to process track {track_num}: {track['name']}",
-            }, "complete")
+            }
             return
 
-        yield sse_event({
+        yield "progress", {
             "track": track_num,
             "percent": 100,
             "status": "converting",
-            "message": f"Processed track {track_num} of {len(tracks)}",
-        }, "progress")
+            "message": f"Processed track {track_num} of {len(burn_tracks)}",
+        }
 
     # Step 2: Create temporary staging directory with numbered structure
     staging_dir = Path(tempfile.mkdtemp(prefix="cd-burner-mp3-"))
 
     try:
         # Build staging directory by copying from cache with proper names
-        for track_idx, track_name, dest_path in _build_mp3_staging_dir(staging_dir):
-            track = tracks[track_idx]
+        for track_idx, track_name, dest_path in _build_mp3_staging_dir(burn_tracks, staging_dir):
+            track = burn_tracks[track_idx]
             cache_path = MP3_DIR / f"{track['id']}.mp3"
             dest_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(cache_path, dest_path)
@@ -743,18 +873,18 @@ def _burn_mp3_cd(dummy: bool):
         for update in burn_mp3_cd(staging_dir, dummy=dummy):
             if update[0] == "progress":
                 _, stage, percent, message = update
-                yield sse_event({
+                yield "progress", {
                     "track": stage,
                     "percent": percent,
                     "status": "burning",
                     "message": message,
-                }, "progress")
+                }
             elif update[0] == "result":
                 _, success, message = update
-                yield sse_event({
+                yield "complete", {
                     "success": success,
                     "message": message,
-                }, "complete")
+                }
 
     finally:
         # Clean up staging directory (keep MP3 cache)
