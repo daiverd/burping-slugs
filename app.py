@@ -1,6 +1,7 @@
 """Audio CD Burner - Flask web application."""
 
 import json
+import logging
 import os
 import random
 import shutil
@@ -36,6 +37,9 @@ from url_downloader import (
     parse_urls,
     start_download,
 )
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 

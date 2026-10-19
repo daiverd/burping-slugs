@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import re
 import threading
 import uuid
@@ -16,6 +17,8 @@ import yt_dlp
 from audio_url_transformer import AudioURLTransformer
 
 from audio_utils import get_duration
+
+logger = logging.getLogger(__name__)
 
 # Shared transformer instance
 _transformer = AudioURLTransformer()
@@ -493,6 +496,7 @@ def start_download(
             job.result = result
             job.message = f"Complete: {result.title}"
         except Exception as e:
+            logger.warning("Download failed for %s: %s", url, e)
             job.status = JobStatus.FAILED
             job.error = str(e)
             job.message = f"Failed: {e}"

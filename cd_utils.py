@@ -1,8 +1,11 @@
 """CD detection and burning utilities using wodim."""
 
+import logging
 import re
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Default CD capacity in seconds (80 minute disc)
 DEFAULT_CAPACITY_SECONDS = 80 * 60
@@ -104,6 +107,8 @@ def burn_cd(
             cmd.append("pregap=0")
         cmd.append(str(wav_file))
 
+    logger.info("Running: %s", " ".join(cmd))
+
     try:
         process = subprocess.Popen(
             cmd,
@@ -123,6 +128,8 @@ def burn_cd(
 
             # Track progress: "Track 01:    5 of   45 MB written (fifo 100%) [buf  99%]   4.0x."
             track_match = re.search(r"Track\s+(\d+):\s+(\d+)\s+of\s+(\d+)\s+MB", line)
+            if line and not track_match:
+                logger.info("wodim: %s", line)
             if track_match:
                 track_num = int(track_match.group(1))
                 written_mb = int(track_match.group(2))
@@ -141,6 +148,7 @@ def burn_cd(
                 yield ("progress", total_tracks, 100, "Fixating disc...")
 
         process.wait()
+        logger.info("wodim exited with code %d", process.returncode)
 
         if process.returncode == 0:
             # Eject disc after successful burn (not in dummy mode)
@@ -264,6 +272,7 @@ def burn_mp3_cd(
             burn_cmd.append("-dummy")
 
         burn_cmd.append(str(iso_path))
+        logger.info("Running: %s", " ".join(burn_cmd))
 
         process = subprocess.Popen(
             burn_cmd,
@@ -281,6 +290,8 @@ def burn_mp3_cd(
 
             # Parse progress: "Track 01:    5 of   45 MB written"
             track_match = re.search(r"Track\s+\d+:\s+(\d+)\s+of\s+(\d+)\s+MB", line)
+            if line and not track_match:
+                logger.info("wodim: %s", line)
             if track_match:
                 written_mb = int(track_match.group(1))
                 total_mb = int(track_match.group(2))
@@ -292,6 +303,7 @@ def burn_mp3_cd(
                 yield ("progress", 2, 100, "Fixating disc...")
 
         process.wait()
+        logger.info("wodim exited with code %d", process.returncode)
 
         if process.returncode == 0:
             # Eject disc after successful burn
