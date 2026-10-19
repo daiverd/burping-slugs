@@ -5,8 +5,10 @@ description = "Burping Slug's Retro CD Burner - Audio CD burning web application
 requires-python = ">=3.10"
 dependencies = [
     "audio-url-transformer",
+    "deno>=2.9.7",
     "flask>=3.0",
     "supervisor>=4.3.0",
+    "yt-dlp[default]>=2026.8.19",
 ]
 
 [tool.uv.sources]
