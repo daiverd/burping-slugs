@@ -138,3 +138,188 @@ def convert_to_cd_wav(input_path: Path, output_path: Path, normalize: bool = Tru
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
+
+
+def get_file_size(filepath: Path) -> int:
+    """Get file size in bytes.
+
+    Args:
+        filepath: Path to file
+
+    Returns:
+        Size in bytes, or 0 if file doesn't exist
+    """
+    try:
+        return filepath.stat().st_size
+    except OSError:
+        return 0
+
+
+def is_mp3(filepath: Path) -> bool:
+    """Check if file is MP3 format using ffprobe.
+
+    Args:
+        filepath: Path to audio file
+
+    Returns:
+        True if file is MP3 format
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                str(filepath),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return False
+
+        data = json.loads(result.stdout)
+        format_name = data.get("format", {}).get("format_name", "")
+        return "mp3" in format_name.lower()
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return False
+
+
+def get_mp3_bitrate(filepath: Path) -> int | None:
+    """Get MP3 bitrate in kbps using ffprobe.
+
+    Args:
+        filepath: Path to MP3 file
+
+    Returns:
+        Bitrate in kbps, or None if unable to determine
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                str(filepath),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+
+        data = json.loads(result.stdout)
+        bit_rate_str = data.get("format", {}).get("bit_rate")
+        if bit_rate_str:
+            return int(bit_rate_str) // 1000  # Convert bps to kbps
+        return None
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, FileNotFoundError):
+        return None
+
+
+def normalize_mp3(input_path: Path, output_path: Path) -> bool:
+    """Normalize MP3 file using ReplayGain via ffmpeg.
+
+    Applies EBU R128 loudness normalization and outputs as MP3.
+
+    Args:
+        input_path: Source MP3 file
+        output_path: Destination MP3 file path
+
+    Returns:
+        True if normalization successful, False otherwise
+    """
+    try:
+        # Pass 1: Analyze loudness
+        measurements = _analyze_loudness(input_path)
+        if measurements is None:
+            # Fall back to simple copy if analysis fails
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return True
+
+        # Pass 2: Normalize with measured values
+        af_filter = (
+            f"loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA={TARGET_LRA}"
+            f":measured_I={measurements['input_i']}"
+            f":measured_TP={measurements['input_tp']}"
+            f":measured_LRA={measurements['input_lra']}"
+            f":measured_thresh={measurements['input_thresh']}"
+            f":offset={measurements['target_offset']}"
+            f":linear=true"
+        )
+
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i", str(input_path),
+                "-af", af_filter,
+                "-codec:a", "libmp3lame",
+                "-q:a", "2",  # VBR quality ~192kbps
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def convert_to_mp3(input_path: Path, output_path: Path, normalize: bool = True) -> bool:
+    """Convert audio file to MP3 with optional normalization.
+
+    Uses VBR Q2 (~192kbps) encoding.
+
+    Args:
+        input_path: Source audio file (any ffmpeg-supported format)
+        output_path: Destination MP3 file path
+        normalize: If True, apply loudness normalization (default True)
+
+    Returns:
+        True if conversion successful, False otherwise
+    """
+    try:
+        if normalize:
+            # Pass 1: Analyze loudness
+            measurements = _analyze_loudness(input_path)
+            if measurements is None:
+                normalize = False
+
+        if normalize:
+            af_filter = (
+                f"loudnorm=I={TARGET_LUFS}:TP={TARGET_TP}:LRA={TARGET_LRA}"
+                f":measured_I={measurements['input_i']}"
+                f":measured_TP={measurements['input_tp']}"
+                f":measured_LRA={measurements['input_lra']}"
+                f":measured_thresh={measurements['input_thresh']}"
+                f":offset={measurements['target_offset']}"
+                f":linear=true"
+            )
+            af_args = ["-af", af_filter]
+        else:
+            af_args = []
+
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i", str(input_path),
+                *af_args,
+                "-codec:a", "libmp3lame",
+                "-q:a", "2",  # VBR quality ~192kbps
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False

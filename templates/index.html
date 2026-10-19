@@ -13,9 +13,11 @@
         <!-- Upload zone -->
         <section aria-label="File upload area">
             <div id="dropzone" tabindex="0" role="button" aria-describedby="upload-hint">
-                <p>Drop audio files here, paste with Ctrl+V, or</p>
+                <p>Drop audio files or folders here, paste URLs with Ctrl+V, or</p>
                 <button type="button" id="browse-btn">Browse Files</button>
+                <button type="button" id="browse-folder-btn">Browse Folder</button>
                 <input type="file" id="file-input" multiple accept="audio/*" hidden aria-label="Select audio files">
+                <input type="file" id="folder-input" webkitdirectory hidden aria-label="Select folder">
             </div>
             <p id="upload-hint" class="hint">Supports any audio format (MP3, FLAC, WAV, OGG, etc.) or paste URLs (YouTube, SoundCloud, etc.)</p>
         </section>
@@ -33,8 +35,8 @@
             <h2>Tracks <span id="track-count">(0)</span></h2>
             <div id="track-list-container">
                 <div id="track-list-wrapper">
-                    <div id="track-list" role="listbox" aria-label="Tracks to burn" tabindex="0">
-                        <!-- Track options inserted here -->
+                    <div id="track-tree" role="tree" aria-label="Tracks to burn" tabindex="0">
+                        <!-- Tree items inserted here -->
                     </div>
                     <div id="track-play-buttons">
                         <!-- Play buttons inserted here -->
@@ -52,7 +54,7 @@
                 <button type="button" id="randomize-btn" disabled>Randomize Order</button>
                 <button type="button" id="clear-btn" disabled>Clear All</button>
             </div>
-            <p class="hint">Keyboard: Alt+Up/Down to move, Alt+Home/End for top/bottom, Delete to remove</p>
+            <p class="hint">Keyboard: Arrow keys to navigate, Space to play, Delete to remove, Enter to expand/collapse</p>
         </section>
 
         <!-- CD capacity -->
@@ -67,9 +69,20 @@
 
         <!-- Burn controls -->
         <section aria-label="Burn controls">
+            <fieldset class="cd-type">
+                <legend>CD Type</legend>
+                <label class="radio-label">
+                    <input type="radio" name="cd-type" value="audio" checked>
+                    <span>Audio CD</span>
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="cd-type" value="mp3">
+                    <span>MP3 CD</span>
+                </label>
+            </fieldset>
             <div class="burn-actions">
                 <button type="button" id="burn-btn" disabled>Burn CD</button>
-                <label class="checkbox-label">
+                <label class="checkbox-label" id="track-gaps-label">
                     <input type="checkbox" id="track-gaps" checked>
                     <span>2-second gaps between tracks</span>
                 </label>

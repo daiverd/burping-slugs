@@ -6,8 +6,10 @@
     // DOM elements
     const dropzone = document.getElementById('dropzone');
     const fileInput = document.getElementById('file-input');
+    const folderInput = document.getElementById('folder-input');
     const browseBtn = document.getElementById('browse-btn');
-    const trackList = document.getElementById('track-list');
+    const browseFolderBtn = document.getElementById('browse-folder-btn');
+    const trackTree = document.getElementById('track-tree');
     const trackCount = document.getElementById('track-count');
     const emptyMessage = document.getElementById('empty-message');
     const randomizeBtn = document.getElementById('randomize-btn');
@@ -24,18 +26,22 @@
     const burnProgress = document.getElementById('burn-progress');
     const downloadSection = document.getElementById('download-section');
     const downloadList = document.getElementById('download-list');
+    const trackGapsLabel = document.getElementById('track-gaps-label');
     const playButtonsContainer = document.getElementById('track-play-buttons');
     const deleteButtonsContainer = document.getElementById('track-delete-buttons');
     const downloadButtonsContainer = document.getElementById('track-download-buttons');
 
     // State
     let tracks = [];
-    let selectedIndex = -1;
+    let selectedId = null; // track id or 'folder:path' for folders
+    let collapsedFolders = new Set(); // folder paths that are collapsed
     let cdCapacity = 80 * 60; // Default 80 minutes in seconds
+    let dataCapacity = 700; // Default 700 MB
     let hasDisc = false;
     let isBurning = false;
     let isDownloading = false;
     let activeDownloads = new Map(); // job_id -> {url, status, progress, message}
+    let cdType = 'audio'; // 'audio' or 'mp3'
 
     // Audio playback
     let audioPlayer = null;
@@ -50,6 +56,7 @@
         setupFileInput();
         setupKeyboardNav();
         setupButtons();
+        setupCdTypeToggle();
         loadTracks();
         checkCdInfo();
 
@@ -60,16 +67,56 @@
         trackGaps.addEventListener('change', updateCapacity);
     }
 
+    // Setup CD type radio button toggle
+    function setupCdTypeToggle() {
+        const radios = document.querySelectorAll('input[name="cd-type"]');
+        radios.forEach(radio => {
+            radio.addEventListener('change', async (e) => {
+                cdType = e.target.value;
+                updateCapacity();
+                // Hide track gaps option for MP3 CD (not applicable)
+                trackGapsLabel.style.display = cdType === 'mp3' ? 'none' : '';
+                // Save to server
+                try {
+                    await fetch('/cd-type', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ cd_type: cdType }),
+                    });
+                } catch (error) {
+                    console.error('Failed to save CD type:', error);
+                }
+            });
+        });
+    }
+
     // Load existing tracks from server on page load
     async function loadTracks() {
         try {
             const response = await fetch('/tracks');
             const data = await response.json();
             if (data.tracks) {
-                tracks = data.tracks;
+                // Store full track info including folder and size
+                tracks = data.tracks.map(t => ({
+                    id: t.id,
+                    name: t.name,
+                    duration: t.duration,
+                    folder: t.folder || '',
+                    size: t.size || 0,
+                }));
                 renderTracks();
-                updateCapacity();
             }
+            // Load CD type from server
+            if (data.cd_type) {
+                cdType = data.cd_type;
+                const radio = document.querySelector(`input[name="cd-type"][value="${cdType}"]`);
+                if (radio) {
+                    radio.checked = true;
+                }
+                // Hide/show track gaps based on type
+                trackGapsLabel.style.display = cdType === 'mp3' ? 'none' : '';
+            }
+            updateCapacity();
         } catch (error) {
             console.error('Failed to load tracks:', error);
         }
@@ -91,9 +138,20 @@
             dropzone.classList.remove('dragover');
         });
 
-        dropzone.addEventListener('drop', (e) => {
+        dropzone.addEventListener('drop', async (e) => {
             e.preventDefault();
             dropzone.classList.remove('dragover');
+
+            // Check for folder drops using DataTransferItem API
+            if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+                const files = await getFilesFromDataTransfer(e.dataTransfer.items);
+                if (files.length > 0) {
+                    uploadFilesWithPaths(files);
+                    return;
+                }
+            }
+
+            // Fallback for simple file drops
             if (e.dataTransfer.files.length > 0) {
                 uploadFiles(e.dataTransfer.files);
             }
@@ -268,25 +326,96 @@
             fileInput.click();
         });
 
+        browseFolderBtn.addEventListener('click', () => {
+            folderInput.click();
+        });
+
         fileInput.addEventListener('change', () => {
             if (fileInput.files.length > 0) {
                 uploadFiles(fileInput.files);
                 fileInput.value = ''; // Reset for re-upload
             }
         });
+
+        folderInput.addEventListener('change', () => {
+            if (folderInput.files.length > 0) {
+                // Folder input already has webkitRelativePath set
+                uploadFilesWithPaths(Array.from(folderInput.files).map(f => ({
+                    file: f,
+                    path: f.webkitRelativePath || f.name
+                })));
+                folderInput.value = ''; // Reset for re-upload
+            }
+        });
     }
 
-    // Upload files to server
-    async function uploadFiles(files) {
+    // Get files from DataTransfer items (supports folders)
+    async function getFilesFromDataTransfer(items) {
+        const files = [];
+
+        async function readEntry(entry, path = '') {
+            if (entry.isFile) {
+                return new Promise((resolve) => {
+                    entry.file((file) => {
+                        files.push({
+                            file: file,
+                            path: path + file.name
+                        });
+                        resolve();
+                    }, () => resolve()); // Ignore errors
+                });
+            } else if (entry.isDirectory) {
+                const dirReader = entry.createReader();
+                const entries = await new Promise((resolve) => {
+                    const allEntries = [];
+                    const readBatch = () => {
+                        dirReader.readEntries((batch) => {
+                            if (batch.length === 0) {
+                                resolve(allEntries);
+                            } else {
+                                allEntries.push(...batch);
+                                readBatch();
+                            }
+                        }, () => resolve(allEntries));
+                    };
+                    readBatch();
+                });
+                const folderPath = path + entry.name + '/';
+                await Promise.all(entries.map(e => readEntry(e, folderPath)));
+            }
+        }
+
+        const entries = [];
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.webkitGetAsEntry) {
+                const entry = item.webkitGetAsEntry();
+                if (entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+
+        await Promise.all(entries.map(e => readEntry(e, '')));
+        return files;
+    }
+
+    // Upload files with path information (for folder uploads)
+    async function uploadFilesWithPaths(filesWithPaths) {
         if (isBurning) {
             showStatus('Cannot add tracks while burning', 'warning');
             return;
         }
 
         const formData = new FormData();
-        for (const file of files) {
+        const paths = [];
+
+        for (const { file, path } of filesWithPaths) {
             formData.append('files', file);
+            paths.push(path);
         }
+
+        formData.append('paths', JSON.stringify(paths));
 
         showStatus('Uploading and analyzing files...');
 
@@ -304,15 +433,20 @@
             }
 
             if (data.tracks && data.tracks.length > 0) {
-                tracks.push(...data.tracks);
+                const newTracks = data.tracks.map(t => ({
+                    id: t.id,
+                    name: t.name,
+                    duration: t.duration,
+                    folder: t.folder || '',
+                    size: t.size || 0,
+                }));
+                tracks.push(...newTracks);
                 renderTracks();
                 updateCapacity();
 
-                // Focus first new track
-                const firstNewIndex = tracks.length - data.tracks.length;
-                selectTrack(firstNewIndex);
+                selectItem(newTracks[0].id);
 
-                showStatus(`Added ${data.tracks.length} track(s)`);
+                showStatus(`Added ${newTracks.length} track(s)`);
             } else {
                 showStatus('No valid audio files found', 'warning');
             }
@@ -321,74 +455,142 @@
         }
     }
 
-    // Render track list
+    // Upload files to server
+    async function uploadFiles(files) {
+        if (isBurning) {
+            showStatus('Cannot add tracks while burning', 'warning');
+            return;
+        }
+
+        const formData = new FormData();
+        const paths = [];
+
+        for (const file of files) {
+            formData.append('files', file);
+            // Capture relative path for folder structure
+            const relativePath = file.webkitRelativePath || file.name;
+            paths.push(relativePath);
+        }
+
+        // Send paths as JSON for folder support
+        formData.append('paths', JSON.stringify(paths));
+
+        showStatus('Uploading and analyzing files...');
+
+        try {
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData,
+            });
+
+            const data = await response.json();
+
+            if (data.error) {
+                showStatus(data.error, 'error');
+                return;
+            }
+
+            if (data.tracks && data.tracks.length > 0) {
+                // Map to include folder and size
+                const newTracks = data.tracks.map(t => ({
+                    id: t.id,
+                    name: t.name,
+                    duration: t.duration,
+                    folder: t.folder || '',
+                    size: t.size || 0,
+                }));
+                tracks.push(...newTracks);
+                renderTracks();
+                updateCapacity();
+
+                // Focus first new track
+                selectItem(newTracks[0].id);
+
+                showStatus(`Added ${newTracks.length} track(s)`);
+            } else {
+                showStatus('No valid audio files found', 'warning');
+            }
+        } catch (error) {
+            showStatus('Upload failed: ' + error.message, 'error');
+        }
+    }
+
+    // Build tree structure from flat track list
+    function buildTree() {
+        const tree = {
+            rootTracks: [],  // tracks without folder
+            folders: new Map(),  // folder path -> { tracks: [], subfolders: Map }
+        };
+
+        tracks.forEach((track, index) => {
+            const trackWithIndex = { ...track, index };
+            if (!track.folder) {
+                tree.rootTracks.push(trackWithIndex);
+            } else {
+                // Get or create folder entry
+                if (!tree.folders.has(track.folder)) {
+                    tree.folders.set(track.folder, { tracks: [], path: track.folder });
+                }
+                tree.folders.get(track.folder).tracks.push(trackWithIndex);
+            }
+        });
+
+        return tree;
+    }
+
+    // Render track tree and buttons (flattened for grid alignment)
     function renderTracks() {
-        trackList.innerHTML = '';
+        trackTree.innerHTML = '';
         playButtonsContainer.innerHTML = '';
         deleteButtonsContainer.innerHTML = '';
         downloadButtonsContainer.innerHTML = '';
 
-        tracks.forEach((track, index) => {
-            // Create option in listbox
-            const item = document.createElement('div');
-            item.className = 'track-item';
-            item.id = `track-option-${index}`;
-            item.setAttribute('role', 'option');
-            item.setAttribute('aria-selected', index === selectedIndex ? 'true' : 'false');
-            item.dataset.index = index;
-            item.dataset.id = track.id;
+        const tree = buildTree();
 
-            item.innerHTML = `
-                <span class="track-number">${index + 1}.</span>
-                <span class="track-name">${escapeHtml(track.name)}</span>
-                <span class="track-duration">${formatDuration(track.duration)}</span>
-            `;
-
-            item.addEventListener('click', () => selectTrack(index));
-            trackList.appendChild(item);
-
-            // Create play button
-            const playBtn = document.createElement('button');
-            playBtn.type = 'button';
-            playBtn.className = 'track-play';
-            playBtn.setAttribute('tabindex', '-1');
-            playBtn.setAttribute('aria-hidden', 'true');
-            playBtn.setAttribute('aria-label', `Play ${track.name}`);
-            playBtn.title = 'Play track';
-            playBtn.textContent = playingTrackId === track.id ? '■' : '▶';
-            playBtn.dataset.trackId = track.id;
-
-            playBtn.addEventListener('click', () => togglePlay(track.id, track.name));
-            playButtonsContainer.appendChild(playBtn);
-
-            // Create delete button
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.className = 'track-delete';
-            deleteBtn.setAttribute('tabindex', '-1');
-            deleteBtn.setAttribute('aria-hidden', 'true');
-            deleteBtn.setAttribute('aria-label', `Delete ${track.name}`);
-            deleteBtn.title = 'Delete track';
-            deleteBtn.textContent = 'x';
-            deleteBtn.dataset.index = index;
-
-            deleteBtn.addEventListener('click', () => deleteTrack(index));
-            deleteButtonsContainer.appendChild(deleteBtn);
-
-            // Create download button
-            const downloadBtn = document.createElement('button');
-            downloadBtn.type = 'button';
-            downloadBtn.className = 'track-download';
-            downloadBtn.setAttribute('tabindex', '-1');
-            downloadBtn.setAttribute('aria-hidden', 'true');
-            downloadBtn.setAttribute('aria-label', `Download ${track.name}`);
-            downloadBtn.title = 'Download track';
-            downloadBtn.textContent = '↓';
-            downloadBtn.dataset.trackId = track.id;
-
-            downloadBtn.addEventListener('click', () => downloadTrack(track.id));
-            downloadButtonsContainer.appendChild(downloadBtn);
+        // Get folder order (order of first track appearance)
+        const folderOrder = [];
+        tracks.forEach(t => {
+            if (t.folder && !folderOrder.includes(t.folder)) {
+                folderOrder.push(t.folder);
+            }
         });
+
+        const rootSetSize = folderOrder.length + tree.rootTracks.length;
+        let rootPos = 0;
+
+        // Render folders (flattened - each item is direct child for grid alignment)
+        folderOrder.forEach(folderPath => {
+            rootPos++;
+            const folder = tree.folders.get(folderPath);
+            const isCollapsed = collapsedFolders.has(folderPath);
+
+            // Folder header (direct child of tree)
+            const header = createFolderHeader(folder, 1, rootPos, rootSetSize);
+            trackTree.appendChild(header);
+            addFolderButtons(folder);
+
+            // Folder tracks (direct children of tree, indented via CSS)
+            folder.tracks.forEach((track, idx) => {
+                const trackEl = createTrackElement(track, 2, idx + 1, folder.tracks.length);
+                trackEl.classList.add('in-folder');
+                if (isCollapsed) {
+                    trackEl.classList.add('collapsed-child');
+                }
+                trackTree.appendChild(trackEl);
+                addTrackButtons(track, isCollapsed);
+            });
+        });
+
+        // Render root-level tracks
+        tree.rootTracks.forEach(track => {
+            rootPos++;
+            const trackEl = createTrackElement(track, 1, rootPos, rootSetSize);
+            trackTree.appendChild(trackEl);
+            addTrackButtons(track, false);
+        });
+
+        // Update aria-activedescendant
+        updateAriaActiveDescendant();
 
         // Update UI state
         const hasTrack = tracks.length > 0;
@@ -397,53 +599,213 @@
         randomizeBtn.disabled = tracks.length < 2 || isBurning;
         clearBtn.disabled = !hasTrack || isBurning;
         updateBurnButton();
+    }
 
-        // Set aria-activedescendant to preserve selection
-        if (selectedIndex >= 0 && selectedIndex < tracks.length) {
-            trackList.setAttribute('aria-activedescendant', `track-option-${selectedIndex}`);
+    // Create folder header element
+    function createFolderHeader(folder, level, posInSet, setSize) {
+        const isCollapsed = collapsedFolders.has(folder.path);
+        const folderId = `folder:${folder.path}`;
+        const isSelected = selectedId === folderId;
+        const totalDuration = folder.tracks.reduce((sum, t) => sum + t.duration, 0);
+
+        const header = document.createElement('div');
+        header.className = 'tree-folder-header';
+        header.id = `treeitem-folder-${folder.path.replace(/[^a-zA-Z0-9]/g, '-')}`;
+        header.setAttribute('role', 'treeitem');
+        header.setAttribute('aria-expanded', String(!isCollapsed));
+        header.setAttribute('aria-selected', String(isSelected));
+        header.setAttribute('aria-level', String(level));
+        header.setAttribute('aria-setsize', String(setSize));
+        header.setAttribute('aria-posinset', String(posInSet));
+        header.setAttribute('aria-label', `${folder.path}, ${folder.tracks.length} tracks, ${formatDuration(totalDuration)}`);
+        header.dataset.id = folderId;
+
+        header.innerHTML = `
+            <span class="folder-icon" aria-hidden="true">${isCollapsed ? '▶' : '▼'}</span>
+            <span class="folder-name">${escapeHtml(folder.path)}</span>
+            <span class="folder-count">(${folder.tracks.length})</span>
+            <span class="folder-duration">${formatDuration(totalDuration)}</span>
+        `;
+
+        header.addEventListener('click', () => selectItem(folderId));
+        header.addEventListener('dblclick', () => toggleFolder(folder.path));
+
+        return header;
+    }
+
+    // Create track element
+    function createTrackElement(track, level, posInSet, setSize) {
+        const isSelected = selectedId === track.id;
+
+        const item = document.createElement('div');
+        item.className = 'tree-track';
+        item.id = `treeitem-track-${track.id}`;
+        item.setAttribute('role', 'treeitem');
+        item.setAttribute('aria-selected', String(isSelected));
+        item.setAttribute('aria-level', String(level));
+        item.setAttribute('aria-setsize', String(setSize));
+        item.setAttribute('aria-posinset', String(posInSet));
+        item.setAttribute('aria-label', `${track.index + 1}. ${track.name}, ${formatDuration(track.duration)}`);
+        item.dataset.id = track.id;
+        item.dataset.index = track.index;
+
+        item.innerHTML = `
+            <span class="track-number">${track.index + 1}.</span>
+            <span class="track-name">${escapeHtml(track.name)}</span>
+            <span class="track-duration">${formatDuration(track.duration)}</span>
+        `;
+
+        item.addEventListener('click', () => selectItem(track.id));
+
+        return item;
+    }
+
+    // Add folder buttons to separate containers
+    function addFolderButtons(folder) {
+        const folderId = `folder:${folder.path}`;
+        const isSelected = selectedId === folderId;
+        const tabIdx = isSelected ? '0' : '-1';
+        const ariaHid = isSelected ? 'false' : 'true';
+
+        // Play - spacer
+        const playSpacer = document.createElement('div');
+        playSpacer.className = 'btn-spacer';
+        playSpacer.dataset.id = folderId;
+        playButtonsContainer.appendChild(playSpacer);
+
+        // Delete button
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'tree-delete';
+        delBtn.tabIndex = tabIdx;
+        delBtn.setAttribute('aria-hidden', ariaHid);
+        delBtn.setAttribute('aria-label', `Delete folder ${folder.path}`);
+        delBtn.textContent = '×';
+        delBtn.dataset.id = folderId;
+        delBtn.addEventListener('click', () => deleteFolder(folder.path));
+        deleteButtonsContainer.appendChild(delBtn);
+
+        // Download - spacer
+        const dlSpacer = document.createElement('div');
+        dlSpacer.className = 'btn-spacer';
+        dlSpacer.dataset.id = folderId;
+        downloadButtonsContainer.appendChild(dlSpacer);
+    }
+
+    // Add track buttons to separate containers
+    function addTrackButtons(track, inCollapsedFolder) {
+        const isSelected = selectedId === track.id;
+        const isPlaying = playingTrackId === track.id;
+        const tabIdx = isSelected ? '0' : '-1';
+        const ariaHid = isSelected ? 'false' : 'true';
+        const hiddenClass = inCollapsedFolder ? ' hidden' : '';
+
+        // Play button
+        const playBtn = document.createElement('button');
+        playBtn.type = 'button';
+        playBtn.className = 'tree-play' + hiddenClass;
+        playBtn.tabIndex = tabIdx;
+        playBtn.setAttribute('aria-hidden', ariaHid);
+        playBtn.setAttribute('aria-label', `${isPlaying ? 'Stop' : 'Play'} ${track.name}`);
+        playBtn.textContent = isPlaying ? '■' : '▶';
+        playBtn.dataset.id = track.id;
+        playBtn.addEventListener('click', () => togglePlay(track.id, track.name));
+        playButtonsContainer.appendChild(playBtn);
+
+        // Delete button
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'tree-delete' + hiddenClass;
+        delBtn.tabIndex = tabIdx;
+        delBtn.setAttribute('aria-hidden', ariaHid);
+        delBtn.setAttribute('aria-label', `Delete ${track.name}`);
+        delBtn.textContent = '×';
+        delBtn.dataset.id = track.id;
+        delBtn.addEventListener('click', () => deleteTrackById(track.id));
+        deleteButtonsContainer.appendChild(delBtn);
+
+        // Download button
+        const dlBtn = document.createElement('button');
+        dlBtn.type = 'button';
+        dlBtn.className = 'tree-download' + hiddenClass;
+        dlBtn.tabIndex = tabIdx;
+        dlBtn.setAttribute('aria-hidden', ariaHid);
+        dlBtn.setAttribute('aria-label', `Download ${track.name}`);
+        dlBtn.textContent = '↓';
+        dlBtn.dataset.id = track.id;
+        dlBtn.addEventListener('click', () => downloadTrack(track.id));
+        downloadButtonsContainer.appendChild(dlBtn);
+    }
+
+    // Update aria-activedescendant on tree
+    function updateAriaActiveDescendant() {
+        if (selectedId) {
+            const selectedEl = trackTree.querySelector(`[data-id="${CSS.escape(selectedId)}"]`);
+            if (selectedEl && selectedEl.id) {
+                trackTree.setAttribute('aria-activedescendant', selectedEl.id);
+            } else {
+                trackTree.removeAttribute('aria-activedescendant');
+            }
         } else {
-            trackList.removeAttribute('aria-activedescendant');
+            trackTree.removeAttribute('aria-activedescendant');
         }
     }
 
-    // Select track
-    function selectTrack(index) {
-        if (index < 0 || index >= tracks.length) return;
-
-        selectedIndex = index;
-
-        trackList.querySelectorAll('.track-item').forEach((item, i) => {
-            item.setAttribute('aria-selected', i === index ? 'true' : 'false');
-        });
-
-        playButtonsContainer.querySelectorAll('.track-play').forEach((btn, i) => {
-            const isSelected = i === index;
-            btn.setAttribute('tabindex', isSelected ? '0' : '-1');
-            btn.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
-        });
-
-        deleteButtonsContainer.querySelectorAll('.track-delete').forEach((btn, i) => {
-            const isSelected = i === index;
-            btn.setAttribute('tabindex', isSelected ? '0' : '-1');
-            btn.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
-        });
-
-        downloadButtonsContainer.querySelectorAll('.track-download').forEach((btn, i) => {
-            const isSelected = i === index;
-            btn.setAttribute('tabindex', isSelected ? '0' : '-1');
-            btn.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
-        });
-
-        // Set aria-activedescendant on listbox
-        trackList.setAttribute('aria-activedescendant', `track-option-${index}`);
-
-        // Ensure listbox has focus (screen reader will announce active descendant)
-        trackList.focus();
+    // Toggle folder collapse state
+    function toggleFolder(folderPath) {
+        if (collapsedFolders.has(folderPath)) {
+            collapsedFolders.delete(folderPath);
+        } else {
+            collapsedFolders.add(folderPath);
+        }
+        renderTracks();
     }
 
-    // Delete track
-    async function deleteTrack(index) {
+    // Select an item (track or folder)
+    function selectItem(id) {
+        selectedId = id;
+
+        // Update all treeitems
+        trackTree.querySelectorAll('[role="treeitem"]').forEach(item => {
+            const isSelected = item.dataset.id === id;
+            item.setAttribute('aria-selected', String(isSelected));
+        });
+
+        // Update aria-activedescendant
+        updateAriaActiveDescendant();
+
+        // Update all buttons in separate containers
+        [playButtonsContainer, deleteButtonsContainer, downloadButtonsContainer].forEach(container => {
+            container.querySelectorAll('button, .btn-spacer').forEach(el => {
+                const isSelected = el.dataset.id === id;
+                if (el.tagName === 'BUTTON') {
+                    el.tabIndex = isSelected ? 0 : -1;
+                    el.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
+                }
+            });
+        });
+
+        trackTree.focus();
+    }
+
+    // Select track by index (for compatibility)
+    function selectTrack(index) {
+        if (index < 0 || index >= tracks.length) return;
+        selectItem(tracks[index].id);
+    }
+
+    // Get currently selected track index
+    function getSelectedTrackIndex() {
+        if (!selectedId || selectedId.startsWith('folder:')) return -1;
+        return tracks.findIndex(t => t.id === selectedId);
+    }
+
+    // Delete track by ID
+    async function deleteTrackById(trackId) {
         if (isBurning) return;
+
+        const index = tracks.findIndex(t => t.id === trackId);
+        if (index === -1) return;
 
         const track = tracks[index];
 
@@ -456,27 +818,51 @@
             await fetch(`/track/${track.id}`, { method: 'DELETE' });
 
             tracks.splice(index, 1);
-
-            // Adjust selection
-            if (selectedIndex >= tracks.length) {
-                selectedIndex = tracks.length - 1;
-            } else if (selectedIndex > index) {
-                selectedIndex--;
-            }
-
             renderTracks();
             updateCapacity();
-
-            // Focus appropriate track
-            if (tracks.length > 0) {
-                const newIndex = Math.min(index, tracks.length - 1);
-                selectTrack(newIndex);
-            }
 
             showStatus(`Removed: ${track.name}`);
         } catch (error) {
             showStatus('Failed to delete track', 'error');
         }
+    }
+
+    // Delete all tracks in a folder
+    async function deleteFolder(folderPath) {
+        if (isBurning) return;
+
+        const folderTracks = tracks.filter(t => t.folder === folderPath);
+        if (folderTracks.length === 0) return;
+
+        // Stop playback if any track in folder is playing
+        if (folderTracks.some(t => t.id === playingTrackId)) {
+            stopPlayback();
+        }
+
+        try {
+            // Delete all tracks in folder
+            await Promise.all(folderTracks.map(t =>
+                fetch(`/track/${t.id}`, { method: 'DELETE' })
+            ));
+
+            // Remove from local state
+            tracks = tracks.filter(t => t.folder !== folderPath);
+            collapsedFolders.delete(folderPath);
+            selectedId = null;
+
+            renderTracks();
+            updateCapacity();
+
+            showStatus(`Removed folder: ${folderPath} (${folderTracks.length} tracks)`);
+        } catch (error) {
+            showStatus('Failed to delete folder', 'error');
+        }
+    }
+
+    // Delete track (legacy index-based, for keyboard nav)
+    async function deleteTrack(index) {
+        if (index < 0 || index >= tracks.length) return;
+        await deleteTrackById(tracks[index].id);
     }
 
     // Download track
@@ -539,13 +925,13 @@
 
     // Update play button states
     function updatePlayButtons() {
-        playButtonsContainer.querySelectorAll('.track-play').forEach((btn) => {
-            const isPlaying = btn.dataset.trackId === playingTrackId;
-            btn.textContent = isPlaying ? '■' : '▶';
-            btn.title = isPlaying ? 'Stop track' : 'Play track';
-            btn.setAttribute('aria-label', isPlaying
-                ? `Stop ${btn.getAttribute('aria-label').replace(/^(Play|Stop) /, '')}`
-                : `Play ${btn.getAttribute('aria-label').replace(/^(Play|Stop) /, '')}`);
+        playButtonsContainer.querySelectorAll('.tree-play').forEach((playBtn) => {
+            const trackId = playBtn.dataset.id;
+            const track = tracks.find(t => t.id === trackId);
+            const isPlaying = trackId === playingTrackId;
+
+            playBtn.textContent = isPlaying ? '■' : '▶';
+            playBtn.setAttribute('aria-label', `${isPlaying ? 'Stop' : 'Play'} ${track ? track.name : ''}`);
         });
     }
 
@@ -568,21 +954,34 @@
             console.error('Reorder failed:', error);
         }
 
-        selectedIndex = toIndex;
         renderTracks();
-        selectTrack(toIndex);
+        selectItem(track.id);
+    }
+
+    // Get list of visible tree item IDs in order
+    function getVisibleItemIds() {
+        const ids = [];
+        trackTree.querySelectorAll('[role="treeitem"]').forEach(item => {
+            // Skip collapsed children
+            if (item.classList.contains('collapsed-child')) {
+                return;
+            }
+            ids.push(item.dataset.id);
+        });
+        return ids;
     }
 
     // Keyboard navigation
     function setupKeyboardNav() {
-        // When listbox receives focus, select first item if nothing selected
-        trackList.addEventListener('focus', () => {
-            if (tracks.length > 0 && selectedIndex < 0) {
-                selectTrack(0);
+        // When tree receives focus, select first item if nothing selected
+        trackTree.addEventListener('focus', () => {
+            if (tracks.length > 0 && !selectedId) {
+                const ids = getVisibleItemIds();
+                if (ids.length > 0) selectItem(ids[0]);
             }
         });
 
-        trackList.addEventListener('keydown', (e) => {
+        trackTree.addEventListener('keydown', (e) => {
             if (isBurning) return;
             if (tracks.length === 0) return;
 
@@ -591,51 +990,91 @@
 
             const key = e.key;
             const alt = e.altKey;
+            const ids = getVisibleItemIds();
+            const currentIdx = ids.indexOf(selectedId);
 
             // Navigation without Alt
             if (!alt) {
                 if (key === 'ArrowDown') {
                     e.preventDefault();
-                    selectTrack(Math.min(selectedIndex + 1, tracks.length - 1));
+                    if (currentIdx < ids.length - 1) {
+                        selectItem(ids[currentIdx + 1]);
+                    }
                 } else if (key === 'ArrowUp') {
                     e.preventDefault();
-                    selectTrack(Math.max(selectedIndex - 1, 0));
+                    if (currentIdx > 0) {
+                        selectItem(ids[currentIdx - 1]);
+                    }
                 } else if (key === 'Home') {
                     e.preventDefault();
-                    selectTrack(0);
+                    if (ids.length > 0) selectItem(ids[0]);
                 } else if (key === 'End') {
                     e.preventDefault();
-                    selectTrack(tracks.length - 1);
+                    if (ids.length > 0) selectItem(ids[ids.length - 1]);
                 } else if (key === 'Delete' || key === 'Backspace') {
                     e.preventDefault();
-                    if (selectedIndex >= 0) {
-                        deleteTrack(selectedIndex);
+                    if (selectedId) {
+                        if (selectedId.startsWith('folder:')) {
+                            deleteFolder(selectedId.replace('folder:', ''));
+                        } else {
+                            deleteTrackById(selectedId);
+                        }
                     }
                 } else if (key === ' ') {
                     e.preventDefault();
-                    if (selectedIndex >= 0) {
-                        const track = tracks[selectedIndex];
+                    const trackIdx = getSelectedTrackIndex();
+                    if (trackIdx >= 0) {
+                        const track = tracks[trackIdx];
                         togglePlay(track.id, track.name);
+                    }
+                } else if (key === 'Enter' || key === 'ArrowRight') {
+                    e.preventDefault();
+                    // Expand folder
+                    if (selectedId && selectedId.startsWith('folder:')) {
+                        const folderPath = selectedId.replace('folder:', '');
+                        if (collapsedFolders.has(folderPath)) {
+                            collapsedFolders.delete(folderPath);
+                            renderTracks();
+                            selectItem(selectedId);
+                        }
+                    }
+                } else if (key === 'ArrowLeft') {
+                    e.preventDefault();
+                    // Collapse folder or go to parent folder
+                    if (selectedId && selectedId.startsWith('folder:')) {
+                        const folderPath = selectedId.replace('folder:', '');
+                        if (!collapsedFolders.has(folderPath)) {
+                            collapsedFolders.add(folderPath);
+                            renderTracks();
+                            selectItem(selectedId);
+                        }
+                    } else if (selectedId) {
+                        // Track selected - go to parent folder
+                        const track = tracks.find(t => t.id === selectedId);
+                        if (track && track.folder) {
+                            selectItem(`folder:${track.folder}`);
+                        }
                     }
                 }
                 return;
             }
 
             // Track movement with Alt
-            if (selectedIndex < 0) return;
+            const trackIdx = getSelectedTrackIndex();
+            if (trackIdx < 0) return;
 
             if (key === 'ArrowUp') {
                 e.preventDefault();
-                moveTrack(selectedIndex, selectedIndex - 1);
+                moveTrack(trackIdx, trackIdx - 1);
             } else if (key === 'ArrowDown') {
                 e.preventDefault();
-                moveTrack(selectedIndex, selectedIndex + 1);
+                moveTrack(trackIdx, trackIdx + 1);
             } else if (key === 'Home') {
                 e.preventDefault();
-                moveTrack(selectedIndex, 0);
+                moveTrack(trackIdx, 0);
             } else if (key === 'End') {
                 e.preventDefault();
-                moveTrack(selectedIndex, tracks.length - 1);
+                moveTrack(trackIdx, tracks.length - 1);
             }
         });
     }
@@ -650,8 +1089,14 @@
                 const data = await response.json();
 
                 if (data.tracks) {
-                    tracks = data.tracks;
-                    selectedIndex = -1;
+                    tracks = data.tracks.map(t => ({
+                        id: t.id,
+                        name: t.name,
+                        duration: t.duration,
+                        folder: t.folder || '',
+                        size: t.size || 0,
+                    }));
+                    selectedId = null;
                     renderTracks();
                     showStatus('Track order randomized');
                 }
@@ -668,7 +1113,8 @@
             try {
                 await fetch('/clear', { method: 'POST' });
                 tracks = [];
-                selectedIndex = -1;
+                selectedId = null;
+                collapsedFolders.clear();
                 renderTracks();
                 updateCapacity();
                 showStatus('All tracks cleared');
@@ -691,16 +1137,18 @@
             if (data.capacity !== null) {
                 cdCapacity = data.capacity;
                 hasDisc = true;
-                discStatus.textContent = `Disc detected: ${formatDuration(cdCapacity)} capacity`;
-                discStatus.className = 'disc-present';
             } else {
                 cdCapacity = data.default_capacity;
                 hasDisc = false;
-                discStatus.textContent = 'No disc detected. Using default 80 min capacity.';
-                discStatus.className = 'disc-absent';
             }
 
-            capacityProgress.max = Math.round(cdCapacity / 60);
+            if (data.data_capacity !== null) {
+                dataCapacity = data.data_capacity;
+            } else {
+                dataCapacity = data.default_data_capacity;
+            }
+
+            updateDiscStatus();
             updateCapacity();
             updateBurnButton();
         } catch (error) {
@@ -708,8 +1156,42 @@
         }
     }
 
+    // Update disc status display based on CD type
+    function updateDiscStatus() {
+        if (cdType === 'mp3') {
+            if (hasDisc) {
+                discStatus.textContent = `Disc detected: ${dataCapacity} MB capacity`;
+                discStatus.className = 'disc-present';
+            } else {
+                discStatus.textContent = 'No disc detected. Using default 700 MB capacity.';
+                discStatus.className = 'disc-absent';
+            }
+        } else {
+            if (hasDisc) {
+                discStatus.textContent = `Disc detected: ${formatDuration(cdCapacity)} capacity`;
+                discStatus.className = 'disc-present';
+            } else {
+                discStatus.textContent = 'No disc detected. Using default 80 min capacity.';
+                discStatus.className = 'disc-absent';
+            }
+        }
+    }
+
     // Update capacity display
     function updateCapacity() {
+        updateDiscStatus();
+
+        if (cdType === 'mp3') {
+            updateCapacityMp3();
+        } else {
+            updateCapacityAudio();
+        }
+
+        updateBurnButton();
+    }
+
+    // Update capacity display for Audio CD mode (time-based)
+    function updateCapacityAudio() {
         const trackDuration = tracks.reduce((sum, t) => sum + t.duration, 0);
         // Add 2 seconds per gap (between tracks, so tracks - 1) when enabled
         const gapTime = trackGaps.checked && tracks.length > 1 ? (tracks.length - 1) * 2 : 0;
@@ -717,6 +1199,7 @@
         const percent = cdCapacity > 0 ? Math.round((totalDuration / cdCapacity) * 100) : 0;
         const isOver = totalDuration > cdCapacity;
 
+        capacityProgress.max = Math.round(cdCapacity / 60);
         capacityProgress.value = Math.round(Math.min(totalDuration, cdCapacity) / 60 * 100) / 100;
         capacityProgress.dataset.over = isOver ? 'true' : 'false';
 
@@ -731,27 +1214,65 @@
         } else {
             capacityText.style.color = '';
         }
+    }
 
-        updateBurnButton();
+    // Update capacity display for MP3 CD mode (size-based)
+    function updateCapacityMp3() {
+        // Sum file sizes in bytes, convert to MB
+        const totalBytes = tracks.reduce((sum, t) => sum + (t.size || 0), 0);
+        const totalMB = Math.round(totalBytes / (1024 * 1024));
+        const percent = dataCapacity > 0 ? Math.round((totalMB / dataCapacity) * 100) : 0;
+        const isOver = totalMB > dataCapacity;
+
+        capacityProgress.max = dataCapacity;
+        capacityProgress.value = Math.min(totalMB, dataCapacity);
+        capacityProgress.dataset.over = isOver ? 'true' : 'false';
+
+        const capacityStr = `${totalMB} MB / ${dataCapacity} MB (${percent}%)`;
+        capacityText.textContent = capacityStr;
+
+        // Update page title with capacity
+        document.title = `Burping Slug's Retro CD Burner - ${capacityStr}`;
+
+        if (isOver) {
+            capacityText.style.color = 'var(--color-danger)';
+        } else {
+            capacityText.style.color = '';
+        }
     }
 
     // Update burn button state
     function updateBurnButton() {
-        const trackDuration = tracks.reduce((sum, t) => sum + t.duration, 0);
-        const gapTime = trackGaps.checked && tracks.length > 1 ? (tracks.length - 1) * 2 : 0;
-        const totalDuration = trackDuration + gapTime;
-        const canBurn = tracks.length > 0 && totalDuration <= cdCapacity && !isBurning;
-        burnBtn.disabled = !canBurn;
+        let canBurn = false;
+        let reason = '';
 
         if (tracks.length === 0) {
-            burnBtn.title = 'Add tracks to burn';
-        } else if (totalDuration > cdCapacity) {
-            burnBtn.title = 'Total duration exceeds disc capacity';
+            reason = 'Add tracks to burn';
         } else if (isBurning) {
-            burnBtn.title = 'Burn in progress';
+            reason = 'Burn in progress';
+        } else if (cdType === 'mp3') {
+            // MP3 mode: check size
+            const totalBytes = tracks.reduce((sum, t) => sum + (t.size || 0), 0);
+            const totalMB = Math.round(totalBytes / (1024 * 1024));
+            if (totalMB > dataCapacity) {
+                reason = 'Total size exceeds disc capacity';
+            } else {
+                canBurn = true;
+            }
         } else {
-            burnBtn.title = '';
+            // Audio mode: check duration
+            const trackDuration = tracks.reduce((sum, t) => sum + t.duration, 0);
+            const gapTime = trackGaps.checked && tracks.length > 1 ? (tracks.length - 1) * 2 : 0;
+            const totalDuration = trackDuration + gapTime;
+            if (totalDuration > cdCapacity) {
+                reason = 'Total duration exceeds disc capacity';
+            } else {
+                canBurn = true;
+            }
         }
+
+        burnBtn.disabled = !canBurn;
+        burnBtn.title = reason;
     }
 
     // Start burn process using Server-Sent Events
@@ -767,7 +1288,7 @@
         burnProgress.value = 0;
         progressText.textContent = 'Starting burn process...';
 
-        const url = `/burn?dummy=${dummyMode.checked}&gaps=${trackGaps.checked}`;
+        const url = `/burn?dummy=${dummyMode.checked}&gaps=${trackGaps.checked}&cd_type=${cdType}`;
         const eventSource = new EventSource(url);
 
         eventSource.addEventListener('progress', (e) => {

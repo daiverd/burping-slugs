@@ -129,6 +129,10 @@ button.danger:hover:not(:disabled) {
     font-size: 1.125rem;
 }
 
+#dropzone button {
+    margin: 0 var(--space-sm);
+}
+
 /* Hints */
 .hint {
     font-size: 0.875rem;
@@ -136,7 +140,7 @@ button.danger:hover:not(:disabled) {
     margin-top: var(--space-sm);
 }
 
-/* Track list */
+/* Track tree */
 #track-list-container {
     background-color: var(--color-surface);
     border-radius: 8px;
@@ -144,30 +148,27 @@ button.danger:hover:not(:disabled) {
     padding: var(--space-sm);
 }
 
-#track-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
+#track-tree {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
 }
 
-#track-list:focus {
+#track-tree:focus {
     outline: none;
 }
 
-#track-list:focus-visible {
+#track-tree:focus-visible {
     outline: 3px solid var(--color-focus);
     outline-offset: -3px;
 }
 
+/* Track list wrapper - grid layout for tree + button columns */
 #track-list-wrapper {
     display: grid;
     grid-template-columns: 1fr auto auto auto;
-}
-
-#track-list {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-xs);
+    gap: 0;
+    align-items: start;
 }
 
 #track-play-buttons,
@@ -178,92 +179,157 @@ button.danger:hover:not(:disabled) {
     gap: var(--space-xs);
 }
 
-.track-item {
+#track-play-buttons button,
+#track-delete-buttons button,
+#track-download-buttons button {
+    background: none;
+    border: none;
+    padding: var(--space-sm);
+    font-size: 1rem;
+    cursor: pointer;
+    opacity: 0.7;
+    height: calc(1rem * 1.5 + var(--space-sm) * 2);
     display: flex;
     align-items: center;
-    gap: var(--space-md);
-    padding: var(--space-sm) var(--space-md);
-    background-color: var(--color-surface-alt);
-    border-radius: 4px 0 0 4px;
-    cursor: pointer;
+    justify-content: center;
 }
 
-.track-item:hover {
+#track-play-buttons button:hover,
+#track-delete-buttons button:hover,
+#track-download-buttons button:hover {
+    opacity: 1;
+}
+
+#track-play-buttons button:focus,
+#track-delete-buttons button:focus,
+#track-download-buttons button:focus {
+    opacity: 1;
+    outline: 2px solid var(--color-focus);
+    outline-offset: -2px;
+}
+
+#track-play-buttons .tree-play {
+    color: var(--color-primary);
+}
+
+#track-delete-buttons .tree-delete {
+    color: var(--color-danger);
+}
+
+#track-download-buttons .tree-download {
+    color: var(--color-text-muted);
+}
+
+.btn-spacer {
+    height: calc(1rem * 1.5 + var(--space-sm) * 2);
+}
+
+#track-play-buttons button.hidden,
+#track-delete-buttons button.hidden,
+#track-download-buttons button.hidden {
+    display: none;
+}
+
+/* Folder items */
+.tree-folder-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background-color: var(--color-surface-alt);
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+    min-height: calc(1rem * 1.5 + var(--space-sm) * 2);
+    box-sizing: border-box;
+}
+
+.tree-folder-header:hover {
     background-color: var(--color-border);
 }
 
-.track-item[aria-selected="true"] {
+.tree-folder-header[aria-selected="true"] {
     background-color: var(--color-border);
     outline: 2px solid var(--color-primary);
     outline-offset: -2px;
 }
 
-.track-item:focus {
-    outline: 3px solid var(--color-focus);
-    outline-offset: -3px;
+.tree-folder-header .folder-icon {
+    color: var(--color-warning);
+    font-size: 1rem;
 }
 
-.track-number {
+.tree-folder-header .folder-name {
+    flex: 1;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tree-folder-header .folder-count {
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+}
+
+.tree-folder-header .folder-duration {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Track items */
+.tree-track {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background-color: var(--color-surface-alt);
+    border-radius: 4px;
+    cursor: pointer;
+    min-height: calc(1rem * 1.5 + var(--space-sm) * 2);
+    box-sizing: border-box;
+}
+
+/* Indented tracks inside folders */
+.tree-track.in-folder {
+    margin-left: var(--space-lg);
+    border-left: 2px solid var(--color-border);
+    padding-left: var(--space-sm);
+    border-radius: 0 4px 4px 0;
+}
+
+/* Hidden collapsed children */
+.tree-track.collapsed-child {
+    display: none;
+}
+
+.tree-track:hover {
+    background-color: var(--color-border);
+}
+
+.tree-track[aria-selected="true"] {
+    background-color: var(--color-border);
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+}
+
+.tree-track .track-number {
     font-weight: 600;
     min-width: 2rem;
     color: var(--color-text-muted);
+    text-align: right;
 }
 
-.track-name {
+.tree-track .track-name {
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.track-duration {
+.tree-track .track-duration {
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
-}
-
-.track-play {
-    background-color: var(--color-surface-alt);
-    border: none;
-    color: var(--color-primary);
-    padding: var(--space-sm) var(--space-md);
-    font-size: 1rem;
-    cursor: pointer;
-    border-radius: 0;
-}
-
-.track-play:hover {
-    background-color: var(--color-primary);
-    color: var(--color-bg);
-}
-
-.track-delete {
-    background-color: var(--color-surface-alt);
-    border: none;
-    color: var(--color-danger);
-    padding: var(--space-sm) var(--space-md);
-    font-size: 1.25rem;
-    cursor: pointer;
-    border-radius: 0;
-}
-
-.track-delete:hover {
-    background-color: var(--color-danger);
-    color: var(--color-text);
-}
-
-.track-download {
-    background-color: var(--color-surface-alt);
-    border: none;
-    color: var(--color-text-muted);
-    padding: var(--space-sm) var(--space-md);
-    font-size: 1rem;
-    cursor: pointer;
-    border-radius: 0 4px 4px 0;
-}
-
-.track-download:hover {
-    background-color: var(--color-primary);
-    color: var(--color-bg);
 }
 
 #empty-message {
@@ -341,6 +407,36 @@ progress::-moz-progress-bar {
 
 .disc-absent {
     color: var(--color-warning);
+}
+
+/* CD type selector */
+.cd-type {
+    border: 2px solid var(--color-border);
+    border-radius: 8px;
+    padding: var(--space-md);
+    margin: 0 0 var(--space-md) 0;
+    background-color: var(--color-surface);
+}
+
+.cd-type legend {
+    padding: 0 var(--space-sm);
+    font-weight: 600;
+    color: var(--color-text-muted);
+}
+
+.cd-type .radio-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-right: var(--space-lg);
+    cursor: pointer;
+}
+
+.cd-type input[type="radio"] {
+    width: 1.25rem;
+    height: 1.25rem;
+    cursor: pointer;
+    accent-color: var(--color-primary);
 }
 
 /* Burn controls */
